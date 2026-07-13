@@ -82,7 +82,7 @@ export default function App() {
   const [editVal, setEditVal] = useState("");
   const [checkedTasks, setCheckedTasks] = useState({});
   const [checkedRoutine, setCheckedRoutine] = useState({});
-  const [checkedChecklist, setCheckedChecklist] = useState({});
+
   const [now, setNow] = useState(new Date());
 
   useEffect(() => {
@@ -92,8 +92,7 @@ export default function App() {
     if (checks) setCheckedTasks(JSON.parse(checks));
     const rChecks = localStorage.getItem(ROUTINE_KEY + getTodayKey());
     if (rChecks) setCheckedRoutine(JSON.parse(rChecks));
-    const cChecks = localStorage.getItem("checklist_" + getTodayKey());
-    if (cChecks) setCheckedChecklist(JSON.parse(cChecks));
+
     const interval = setInterval(() => setNow(new Date()), 30000);
     return () => clearInterval(interval);
   }, []);
@@ -115,12 +114,6 @@ export default function App() {
     localStorage.setItem(ROUTINE_KEY + getTodayKey(), JSON.stringify(next));
   };
 
-  const toggleChecklist = (i) => {
-    const next = { ...checkedChecklist, [i]: !checkedChecklist[i] };
-    setCheckedChecklist(next);
-    localStorage.setItem("checklist_" + getTodayKey(), JSON.stringify(next));
-  };
-
   const startEdit = (i) => { setEditIdx(i); setEditVal(tasks[i]); };
   const saveEdit = () => {
     const t = [...tasks]; t[editIdx] = editVal; saveTasks(t); setEditIdx(null);
@@ -129,9 +122,6 @@ export default function App() {
   const completedTasks = Object.values(checkedTasks).filter(Boolean).length;
   const completedMorn = MORNING_ROUTINE.filter(r => checkedRoutine[r.id]).length;
   const completedEve = EVENING_ROUTINE.filter(r => checkedRoutine[r.id]).length;
-  const completedCheck = Object.values(checkedChecklist).filter(Boolean).length;
-  const checklistOK = completedCheck === CHECKLIST.length;
-
   const dateStr = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
   const timeStr = now.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
   const currentHour = now.getHours() + now.getMinutes() / 60;
@@ -140,8 +130,6 @@ export default function App() {
     { id: "dashboard", label: "📋 Dashboard" },
     { id: "morning", label: "🌅 Matin" },
     { id: "tasks", label: "✅ Tâches" },
-    { id: "trader", label: "📈 Trader" },
-    { id: "rules", label: "⚡ Règles" },
     { id: "evening", label: "🌙 Soir" },
   ];
 
@@ -231,34 +219,6 @@ export default function App() {
                   </div>
                 );
               })}
-            </div>
-
-            {/* Checklist trading */}
-            <div style={{
-              background: checklistOK ? "#0a1a0e" : "#0f1520",
-              borderRadius: 10, border: `1px solid ${checklistOK ? "#2a5a2a" : "#1a2535"}`,
-              padding: "16px 18px", marginBottom: 16,
-            }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <div style={{ fontSize: 10, letterSpacing: 3, color: checklistOK ? "#68d391" : "#8ab4f8", textTransform: "uppercase" }}>
-                  ✓ Checklist d'ouverture de session
-                </div>
-                <div style={{ fontSize: 11, color: checklistOK ? "#68d391" : "#5a6a7a", fontFamily: "monospace" }}>
-                  {completedCheck}/8 {checklistOK ? "— PRÊT À TRADER ✓" : ""}
-                </div>
-              </div>
-              {CHECKLIST.map((item, i) => (
-                <div key={i} onClick={() => toggleChecklist(i)} style={{
-                  display: "flex", alignItems: "center", gap: 10, padding: "7px 0",
-                  borderBottom: i < CHECKLIST.length - 1 ? "1px solid #141e2a" : "none", cursor: "pointer",
-                }}>
-                  <CheckBox checked={!!checkedChecklist[i]} color="#68d391" />
-                  <div style={{
-                    fontSize: 12, color: checkedChecklist[i] ? "#3a5a3a" : "#9a9a8a",
-                    textDecoration: checkedChecklist[i] ? "line-through" : "none", lineHeight: 1.4,
-                  }}>{item}</div>
-                </div>
-              ))}
             </div>
 
             {/* Tasks preview */}
@@ -382,131 +342,6 @@ export default function App() {
               padding: "12px", textAlign: "center", fontSize: 11, color: "#3a4a5a",
             }}>
               Cliquer sur le texte d'une tâche pour la modifier · Entrée pour valider
-            </div>
-          </div>
-        )}
-
-        {/* ── TRADER ── */}
-        {view === "trader" && (
-          <div>
-            <div style={{ marginBottom: 22 }}>
-              <div style={{ fontSize: 10, letterSpacing: 4, color: "#8ab4f8", textTransform: "uppercase", marginBottom: 5 }}>Planning Spécial</div>
-              <div style={{ fontSize: 26, color: "#e8e0d4", fontWeight: "bold" }}>Journée Day Trader</div>
-              <div style={{ fontSize: 12, color: "#5a6a7a", marginTop: 5 }}>
-                Deriv · Indices Synthétiques · Max 5 trades/jour · RR min 1:3
-              </div>
-            </div>
-
-            {/* Paramètres compte */}
-            <div style={{
-              display: "grid", gridTemplateColumns: "1fr 1fr 1fr",
-              gap: 8, marginBottom: 18,
-            }}>
-              {[
-                { label: "Risque max/trade", val: "4%" },
-                { label: "Trades max/jour", val: "5" },
-                { label: "Perte max/jour", val: "16%" },
-                { label: "Perte max/sem.", val: "50%" },
-                { label: "RR minimum", val: "1:3" },
-                { label: "Objectif mensuel", val: "+10%" },
-              ].map(({ label, val }) => (
-                <div key={label} style={{
-                  background: "#0f1520", borderRadius: 7, padding: "10px 12px",
-                  border: "1px solid #1a2535", textAlign: "center",
-                }}>
-                  <div style={{ fontSize: 16, fontWeight: "bold", color: "#8ab4f8", fontFamily: "monospace" }}>{val}</div>
-                  <div style={{ fontSize: 9, color: "#4a5a6a", letterSpacing: 1, textTransform: "uppercase", marginTop: 2 }}>{label}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Timeline */}
-            <div style={{ fontSize: 10, letterSpacing: 3, color: "#4a5a6a", textTransform: "uppercase", marginBottom: 14 }}>Planning de la journée</div>
-            {TRADER_SCHEDULE.map((item, i) => {
-              const [h, m] = item.time.split(":").map(Number);
-              const itemHour = h + m / 60;
-              const isNow = Math.abs(currentHour - itemHour) < 0.7;
-              const isPast = currentHour > itemHour + 0.7;
-              const colors = { trade: "#8ab4f8", task: "#68d391", break: "#f0b429", evening: "#c084fc", checklist: "#fb8a4a" };
-              const color = colors[item.type] || "#8a9ab0";
-              return (
-                <div key={i} style={{ display: "flex", gap: 12, position: "relative" }}>
-                  <div style={{
-                    flexShrink: 0, width: 48, textAlign: "right", fontFamily: "monospace", fontSize: 11,
-                    color: isNow ? color : isPast ? "#2a3a4a" : "#5a6a7a", paddingTop: 13,
-                  }}>{item.time}</div>
-                  <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center" }}>
-                    <div style={{
-                      width: 10, height: 10, borderRadius: "50%", marginTop: 14,
-                      background: isNow ? color : isPast ? "#1e2a3a" : "#141e2a",
-                      border: `2px solid ${isNow ? color : "#1e2a3a"}`,
-                      boxShadow: isNow ? `0 0 8px ${color}` : "none", flexShrink: 0,
-                    }} />
-                    {i < TRADER_SCHEDULE.length - 1 && (
-                      <div style={{ width: 1, flex: 1, background: "#141e2a", minHeight: 18 }} />
-                    )}
-                  </div>
-                  <div style={{
-                    flex: 1, background: isNow ? `${color}12` : "#0f1520",
-                    borderRadius: 8, padding: "9px 13px", marginBottom: 6,
-                    border: `1px solid ${isNow ? color + "35" : "#1a2535"}`,
-                    opacity: isPast && !isNow ? 0.45 : 1, transition: "all 0.3s",
-                  }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ fontSize: 13, fontWeight: "bold", color: isNow ? color : "#c0b8a8" }}>{item.label}</div>
-                      <div style={{
-                        fontSize: 8, letterSpacing: 2, color: color, textTransform: "uppercase",
-                        background: `${color}18`, padding: "2px 7px", borderRadius: 3,
-                      }}>{item.type}</div>
-                    </div>
-                    <div style={{ fontSize: 11, color: "#4a5a6a", marginTop: 4, lineHeight: 1.5 }}>{item.desc}</div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* ── RÈGLES ── */}
-        {view === "rules" && (
-          <div>
-            <div style={{ marginBottom: 22 }}>
-              <div style={{ fontSize: 10, letterSpacing: 4, color: "#fb8a4a", textTransform: "uppercase", marginBottom: 5 }}>Plan de Trading Personnel</div>
-              <div style={{ fontSize: 26, color: "#e8e0d4", fontWeight: "bold" }}>13 Règles Non Négociables</div>
-              <div style={{ fontSize: 12, color: "#5a6a7a", marginTop: 5 }}>
-                Violation = arrêt immédiat · Ce plan est un contrat avec toi-même
-              </div>
-            </div>
-            {TRADING_RULES.map((r, i) => (
-              <div key={i} style={{
-                background: "#0f1520", borderRadius: 9, border: "1px solid #1a2535",
-                padding: "14px 16px", marginBottom: 8,
-              }}>
-                <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-                  <div style={{
-                    flexShrink: 0, width: 28, height: 28, borderRadius: 5,
-                    background: "#141e2a", border: "1px solid #2a3a4a",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                  }}>
-                    <span style={{ fontSize: 10, fontFamily: "monospace", color: "#fb8a4a" }}>{r.num}</span>
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, color: "#c8c0b0", lineHeight: 1.5, marginBottom: 5 }}>{r.rule}</div>
-                    <div style={{ fontSize: 11, color: "#4a5a6a", fontStyle: "italic" }}>
-                      → {r.consequence}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-            <div style={{
-              background: "#0d1219", borderRadius: 9, border: "1px solid #2a3a2a",
-              padding: "14px 18px", marginTop: 8, textAlign: "center",
-            }}>
-              <div style={{ fontSize: 12, color: "#7a8a7a", lineHeight: 1.8 }}>
-                "Ce plan de trading est un contrat avec moi-même.<br />
-                Le respecter est la seule décision qui dépend entièrement de moi."
-              </div>
             </div>
           </div>
         )}
