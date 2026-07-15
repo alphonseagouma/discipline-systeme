@@ -20,17 +20,31 @@ const MIGRATION_DATA = {
 };
 
 async function dbGet(table, dateKey) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?date_key=eq.${dateKey}&select=*`, { headers: HEADERS });
-  const data = await res.json();
-  return data?.[0] || null;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?date_key=eq.${dateKey}&select=*`, { headers: HEADERS });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return Array.isArray(data) && data.length > 0 ? data[0] : null;
+  } catch { return null; }
 }
 
 async function dbUpsert(table, row) {
-  await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
-    method: "POST",
-    headers: HEADERS,
-    body: JSON.stringify(row),
-  });
+  try {
+    const existing = await dbGet(table, row.date_key);
+    if (existing) {
+      await fetch(`${SUPABASE_URL}/rest/v1/${table}?date_key=eq.${row.date_key}`, {
+        method: "PATCH",
+        headers: { ...HEADERS, "Prefer": "return=minimal" },
+        body: JSON.stringify(row),
+      });
+    } else {
+      await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+        method: "POST",
+        headers: { ...HEADERS, "Prefer": "return=minimal" },
+        body: JSON.stringify(row),
+      });
+    }
+  } catch { /* silencieux */ }
 }
 
 const MORNING_ROUTINE = [
