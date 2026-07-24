@@ -126,6 +126,8 @@ const RECURRENCES = [
 ];
 const LABEL_COLORS = ["#68d391","#8ab4f8","#f0b429","#fb8a4a","#c084fc","#f472b6","#4dd4d4","#e8e0d4"];
 const PLANNER_HOURS = Array.from({ length: 17 }, (_, i) => i + 6); // 06h -> 22h
+const GOOGLE_CLIENT_ID = "475742292156-jh4j1m135g5oeco89ko8rasmab5u78ug.apps.googleusercontent.com";
+const GOOGLE_SCOPE = "https://www.googleapis.com/auth/calendar";
 
 function pad2(n) { return String(n).padStart(2, "0"); }
 function toDateKey(d) { return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
@@ -213,6 +215,10 @@ export default function App() {
   const [showLabelManager, setShowLabelManager] = useState(false);
   const [newLabelName, setNewLabelName] = useState("");
   const [newLabelColor, setNewLabelColor] = useState(LABEL_COLORS[0]);
+  const [googleToken, setGoogleToken] = useState(null);
+  const [googleEvents, setGoogleEvents] = useState([]);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const googleTokenClient = useRef(null);
 
   // Migration + chargement initial
   useEffect(() => {
@@ -430,6 +436,75 @@ export default function App() {
   const weekDays = getWeekDays(weekStart);
   const tasksForDay = (dateKey) => plannerTasks.filter(t => t.scheduled_date === dateKey);
   const labelById = (id) => plannerLabels.find(l => l.id === id);
+
+  // --- Google Calendar ---
+  const connectGoogle = () => {
+    if (!window.google || !window.google.accounts) {
+      alert("Google n'est pas encore chargé, réessaie dans 2 secondes.");
+      return;
+    }
+    if (!googleTokenClient.current) {
+      googleTokenClient.current = window.google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: GOOGLE_SCOPE,
+        callback: (resp) => {
+          if (resp && resp.access_token) setGoogleToken(resp.access_token);
+        },
+      });
+    }
+    googleTokenClient.current.requestAccessToken();
+  };
+
+  const disconnectGoogle = () => { setGoogleToken(null); setGoogleEvents([]); };
+
+  const loadGoogleEvents = async () => {
+    if (!googleToken) return;
+    setGoogleLoading(true);
+    try {
+      const timeMin = weekDays[0].toISOString();
+      const end = new Date(weekDays[6]); end.setHours(23,59,59,999);
+      const timeMax = end.toISOString();
+      const res = await fetch(
+        `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true&orderBy=startTime`,
+        { headers: { Authorization: `Bearer ${googleToken}` } }
+      );
+      if (res.status === 401) { setGoogleToken(null); setGoogleEvents([]); return; }
+      const data = await res.json();
+      setGoogleEvents(data.items || []);
+    } catch { /* silencieux */ }
+    setGoogleLoading(false);
+  };
+
+  useEffect(() => {
+    if (view === "planner" && googleToken) loadGoogleEvents();
+  }, [view, googleToken, weekStart]);
+
+  const sendTaskToGoogle = async (task) => {
+    if (!googleToken) { alert("Connecte d'abord Google Calendar."); return; }
+    if (!task.scheduled_date) { alert("Planifie d'abord la tâche sur une date."); return; }
+    const time = task.scheduled_time || "09:00:00";
+    const startDT = `${task.scheduled_date}T${time.length===5?time+":00":time}`;
+    const start = new Date(startDT);
+    const end = new Date(start.getTime() + 60*60*1000);
+    try {
+      await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${googleToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          summary: task.title,
+          start: { dateTime: start.toISOString() },
+          end: { dateTime: end.toISOString() },
+        }),
+      });
+      loadGoogleEvents();
+    } catch { /* silencieux */ }
+  };
+
+  const eventsForDay = (dateKey) => googleEvents.filter(ev => {
+    const s = ev.start?.dateTime || ev.start?.date;
+    return s && s.slice(0,10) === dateKey;
+  });
+  // --- fin Google Calendar ---
 
   const NAV = [
     { id: "dashboard", label: "📋 Dashboard" },
@@ -718,6 +793,11 @@ export default function App() {
                   <span style={{ fontSize:13, color:"#c8c0b4", fontFamily:"monospace" }}>{weekLabel}</span>
                   <button onClick={() => setWeekStart(getWeekStart())} style={{ background:"#0f1520", border:"1px solid #1a2535", borderRadius:6, color:"#5a6a7a", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>Aujourd'hui</button>
                   <button onClick={() => setShowLabelManager(s => !s)} style={{ background:"#0f1520", border:"1px solid #1a2535", borderRadius:6, color:"#c084fc", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>🏷️ Étiquettes</button>
+                  {googleToken ? (
+                    <button onClick={disconnectGoogle} style={{ background:"#0d1a12", border:"1px solid #2a4a20", borderRadius:6, color:"#68d391", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>📅 Google connecté {googleLoading?"⟳":""}</button>
+                  ) : (
+                    <button onClick={connectGoogle} style={{ background:"#0f1520", border:"1px solid #1a2535", borderRadius:6, color:"#8ab4f8", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>📅 Connecter Google Calendar</button>
+                  )}
                 </div>
                 <button onClick={() => setWeekStart(d => { const n=new Date(d); n.setDate(n.getDate()+7); return n; })}
                   style={{ background:"#0f1520", border:"1px solid #1a2535", borderRadius:6, color:"#8ab4f8", padding:"6px 12px", cursor:"pointer", fontSize:13 }}>→</button>
@@ -776,6 +856,12 @@ export default function App() {
                           <div style={{ fontSize:10, color:isToday?"#68d391":"#5a6a7a", fontFamily:"monospace", textTransform:"uppercase" }}>{day.toLocaleDateString("fr-FR",{weekday:"short"})}</div>
                           <div style={{ fontSize:15, color:isToday?"#68d391":"#c8c0b4", fontWeight:"bold" }}>{day.getDate()}</div>
                         </div>
+                        {eventsForDay(dateKey).map(ev => (
+                          <div key={ev.id} style={{ background:"#1a1530", border:"1px solid #3a2a5a", borderRadius:6, padding:"5px 8px", marginBottom:6, fontSize:11, color:"#c084fc" }}>
+                            📅 {ev.summary || "(sans titre)"}
+                            {ev.start?.dateTime && <div style={{ fontSize:9, color:"#8a6ab0", marginTop:2 }}>{new Date(ev.start.dateTime).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})}</div>}
+                          </div>
+                        ))}
                         {untimed.map(t => <TaskCard key={t.id} task={t} />)}
                         <div style={{ borderTop:"1px solid #141e2a", marginTop:4, paddingTop:4 }}>
                           {PLANNER_HOURS.map(h => {
@@ -837,13 +923,17 @@ export default function App() {
                       <button onClick={() => setEditingTaskId(null)}
                         style={{ flex:1, background:"#68d391", border:"none", borderRadius:6, color:"#0a0c10", padding:"8px 0", cursor:"pointer", fontSize:12, fontWeight:"bold" }}>Fermer</button>
                     </div>
+                    {googleToken && (
+                      <button onClick={() => sendTaskToGoogle(editingTask)}
+                        style={{ width:"100%", marginTop:8, background:"#1a1530", border:"1px solid #3a2a5a", borderRadius:6, color:"#c084fc", padding:"8px 0", cursor:"pointer", fontSize:12 }}>📅 Envoyer vers Google Calendar</button>
+                    )}
                   </div>
                 </div>
               )}
 
               <div style={{ background:"#0d1219", borderRadius:9, border:"1px solid #1a2535", padding:"12px 16px", marginTop:16, textAlign:"center" }}>
                 <div style={{ fontSize:11, color:"#3a4a5a", lineHeight:1.7 }}>
-                  📅 Intégration Google Calendar — en attente de connexion (à venir)
+                  {googleToken ? "📅 Google Calendar connecté — tes événements apparaissent en violet dans chaque jour." : "📅 Connecte Google Calendar (bouton en haut) pour voir tes événements et y envoyer tes tâches."}
                 </div>
               </div>
             </div>
