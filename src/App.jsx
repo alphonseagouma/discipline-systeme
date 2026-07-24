@@ -219,11 +219,32 @@ export default function App() {
   const [googleEvents, setGoogleEvents] = useState([]);
   const [googleLoading, setGoogleLoading] = useState(false);
   const googleTokenClient = useRef(null);
+  const [goals, setGoals] = useState([]);
+  const [goalsLoading, setGoalsLoading] = useState(false);
+  const [newGoalTitle, setNewGoalTitle] = useState("");
+  const [editingGoalId, setEditingGoalId] = useState(null);
 
-  // Migration + chargement initial
+  // Migration + chargement initial + resynchronisation périodique
+  const refreshToday = async () => {
+    setSyncing(true);
+    try {
+      const todayKey = getTodayKey();
+      const taskRow = await dbGet("daily_tasks", todayKey);
+      const routineRow = await dbGet("daily_routines", todayKey);
+      if (taskRow) {
+        setTasks(taskRow.tasks || DEFAULT_TASKS);
+        setCheckedTasks(taskRow.checked_tasks || {});
+      }
+      if (routineRow) setCheckedRoutine(routineRow.checked_routine || {});
+      setSyncOk(true);
+    } catch(e) {
+      setSyncOk(false);
+    }
+    setSyncing(false);
+  };
+
   useEffect(() => {
     const init = async () => {
-      setSyncing(true);
       try {
         // Migrer les données d'hier si pas encore en base
         for (const [dateKey, data] of Object.entries(MIGRATION_DATA)) {
@@ -233,25 +254,28 @@ export default function App() {
             await dbUpsert("daily_routines", { date_key: dateKey, checked_routine: data.checked_routine });
           }
         }
-        // Charger aujourd'hui
-        const todayKey = getTodayKey();
-        const taskRow = await dbGet("daily_tasks", todayKey);
-        const routineRow = await dbGet("daily_routines", todayKey);
-        if (taskRow) {
-          setTasks(taskRow.tasks || DEFAULT_TASKS);
-          setCheckedTasks(taskRow.checked_tasks || {});
-        }
-        if (routineRow) setCheckedRoutine(routineRow.checked_routine || {});
-        setSyncOk(true);
+        await refreshToday();
+        await loadGoals();
       } catch(e) {
         setSyncOk(false);
+        setSyncing(false);
       }
-      setSyncing(false);
     };
     init();
     const interval = setInterval(() => setNow(new Date()), 30000);
     return () => clearInterval(interval);
   }, []);
+
+  // Resynchronisation auto : toutes les 30s + à chaque retour sur l'onglet/app (multi-appareils)
+  useEffect(() => {
+    const resync = () => { refreshToday(); loadGoals(); if (view === "planner" || view === "today") loadPlanner(); };
+    const syncInterval = setInterval(resync, 30000);
+    const onFocus = () => resync();
+    window.addEventListener("focus", onFocus);
+    const onVis = () => { if (!document.hidden) resync(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(syncInterval); window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onVis); };
+  }, [view]);
 
   const saveToDb = (newTasks, newChecks, newRoutine) => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -361,7 +385,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (view !== "planner") return;
+    if (view !== "planner" && view !== "today") return;
     loadPlanner();
   }, [view]);
 
@@ -506,7 +530,43 @@ export default function App() {
   });
   // --- fin Google Calendar ---
 
+  // --- Objectifs (Effet Cumulé) ---
+  const loadGoals = async () => {
+    setGoalsLoading(true);
+    const g = await dbList("goals", "&order=created_at.asc");
+    setGoals(g || []);
+    setGoalsLoading(false);
+  };
+
+  const addGoal = async () => {
+    const title = newGoalTitle.trim();
+    if (!title || goals.length >= 3) return;
+    const row = await dbInsert("goals", { title, color: LABEL_COLORS[goals.length % LABEL_COLORS.length] });
+    if (row) setGoals(prev => [...prev, row]);
+    setNewGoalTitle("");
+  };
+
+  const patchGoal = async (id, patch) => {
+    setGoals(prev => prev.map(g => g.id === id ? { ...g, ...patch } : g));
+    await dbPatch("goals", id, patch);
+  };
+
+  const deleteGoal = async (id) => {
+    setGoals(prev => prev.filter(g => g.id !== id));
+    // Détacher les tâches liées à cet objectif
+    plannerTasks.filter(t => t.goal_id === id).forEach(t => patchPlannerTask(t.id, { goal_id: null }));
+    await dbDelete("goals", id);
+  };
+
+  const goalProgress = (goalId) => {
+    const linked = plannerTasks.filter(t => t.goal_id === goalId);
+    const done = linked.filter(t => t.completed).length;
+    return { done, total: linked.length };
+  };
+  // --- fin Objectifs ---
+
   const NAV = [
+    { id: "today", label: "🎯 Aujourd'hui" },
     { id: "dashboard", label: "📋 Dashboard" },
     { id: "morning", label: "🌅 Matin" },
     { id: "tasks", label: "✅ Tâches" },
@@ -610,6 +670,113 @@ export default function App() {
       </div>
 
       <div style={{ maxWidth:780, margin:"0 auto", padding:"22px 18px" }}>
+
+        {/* AUJOURD'HUI — vue unifiée */}
+        {view==="today" && (() => {
+          const todayKey = getTodayKey();
+          const todayPlannerTasks = plannerTasks.filter(t => t.scheduled_date === todayKey);
+          return (
+            <div>
+              <div style={{ marginBottom:20 }}>
+                <div style={{ fontSize:10, letterSpacing:4, color:"#68d391", textTransform:"uppercase", marginBottom:5 }}>Vue unifiée</div>
+                <div style={{ fontSize:26, color:"#e8e0d4", fontWeight:"bold", textTransform:"capitalize" }}>{dateStr}</div>
+              </div>
+
+              {/* Objectifs — Effet Cumulé */}
+              <div style={{ background:"#0f1520", borderRadius:10, border:"1px solid #1a2535", padding:"16px 18px", marginBottom:16 }}>
+                <div style={{ fontSize:10, letterSpacing:3, color:"#f0b429", textTransform:"uppercase", marginBottom:12 }}>🎯 Mes objectifs (Effet Cumulé)</div>
+                {goals.map(g => {
+                  const { done, total } = goalProgress(g.id);
+                  const pct = total > 0 ? Math.round((done/total)*100) : 0;
+                  return (
+                    <div key={g.id} style={{ marginBottom:12 }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
+                        {editingGoalId === g.id ? (
+                          <input value={g.title} onChange={e => patchGoal(g.id, { title: e.target.value })} onBlur={() => setEditingGoalId(null)}
+                            onKeyDown={e => e.key==="Enter" && setEditingGoalId(null)} autoFocus
+                            style={{ flex:1, background:"#0a0c10", border:"1px solid #2a3a4a", borderRadius:5, padding:"4px 8px", color:"#e8e0d4", fontSize:13, outline:"none" }} />
+                        ) : (
+                          <div onClick={() => setEditingGoalId(g.id)} style={{ fontSize:13, color:g.color, fontWeight:"bold", cursor:"pointer" }}>{g.title}</div>
+                        )}
+                        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                          <span style={{ fontSize:11, color:"#5a6a7a", fontFamily:"monospace" }}>{done}/{total} actions</span>
+                          <span onClick={() => deleteGoal(g.id)} style={{ fontSize:11, color:"#3a4a5a", cursor:"pointer" }}>✕</span>
+                        </div>
+                      </div>
+                      <div style={{ height:6, background:"#0a0f18", borderRadius:3, overflow:"hidden" }}>
+                        <div style={{ height:"100%", width:`${pct}%`, background:g.color, transition:"width 0.4s" }} />
+                      </div>
+                    </div>
+                  );
+                })}
+                {goals.length < 3 && (
+                  <div style={{ display:"flex", gap:6, marginTop:10 }}>
+                    <input value={newGoalTitle} onChange={e => setNewGoalTitle(e.target.value)} onKeyDown={e => e.key==="Enter" && addGoal()}
+                      placeholder="Nouvel objectif majeur (max 3)..."
+                      style={{ flex:1, background:"#0a0c10", border:"1px solid #1a2535", borderRadius:5, padding:"7px 10px", color:"#e8e0d4", fontSize:12, outline:"none" }} />
+                    <button onClick={addGoal} style={{ background:"#f0b429", border:"none", borderRadius:5, padding:"7px 14px", color:"#0a0c10", fontSize:12, fontWeight:"bold", cursor:"pointer" }}>+ Ajouter</button>
+                  </div>
+                )}
+                {goals.length === 0 && <div style={{ fontSize:11, color:"#3a4a5a", fontStyle:"italic" }}>Ajoute 1 à 3 objectifs majeurs, puis relie tes tâches du Planificateur à un objectif pour suivre ta progression jour après jour.</div>}
+                <div style={{ fontSize:10, color:"#3a4a5a", marginTop:10, fontStyle:"italic" }}>💡 Lie une tâche à un objectif depuis l'onglet Planificateur, en cliquant sur la tâche.</div>
+              </div>
+
+              {/* 6 tâches du jour */}
+              <div style={{ background:"#0f1520", borderRadius:10, border:"1px solid #1a2535", padding:"16px 18px", marginBottom:16 }}>
+                <div style={{ fontSize:10, letterSpacing:3, color:"#68d391", textTransform:"uppercase", marginBottom:12 }}>✅ 6 Tâches du jour ({completedTasks}/6)</div>
+                {tasks.map((t,i) => (
+                  <div key={i} onClick={() => toggleTask(i)} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderBottom:i<5?"1px solid #141e2a":"none", cursor:"pointer" }}>
+                    <CheckBox checked={!!checkedTasks[i]}/>
+                    <div style={{ fontSize:13, color:checkedTasks[i]?"#3a5a3a":"#b8b0a4", textDecoration:checkedTasks[i]?"line-through":"none" }}>{t}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Tâches planifiées du jour (Planificateur) */}
+              {todayPlannerTasks.length > 0 && (
+                <div style={{ background:"#0f1520", borderRadius:10, border:"1px solid #1a2535", padding:"16px 18px", marginBottom:16 }}>
+                  <div style={{ fontSize:10, letterSpacing:3, color:"#8ab4f8", textTransform:"uppercase", marginBottom:12 }}>🗓️ Tâches planifiées aujourd'hui</div>
+                  {todayPlannerTasks.map(t => {
+                    const pr = PRIORITIES.find(p => p.val === t.priority) || PRIORITIES[1];
+                    return (
+                      <div key={t.id} onClick={() => toggleTaskDone(t)} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderBottom:"1px solid #141e2a", cursor:"pointer" }}>
+                        <CheckBox checked={!!t.completed} color={pr.color}/>
+                        {t.scheduled_time && <span style={{ fontSize:10, color:"#8ab4f8", fontFamily:"monospace" }}>{t.scheduled_time.slice(0,5)}</span>}
+                        <div style={{ fontSize:13, flex:1, color:t.completed?"#3a5a3a":"#b8b0a4", textDecoration:t.completed?"line-through":"none" }}>{t.title}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Routines compactes */}
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
+                <div style={{ background:"#0f1520", borderRadius:10, border:"1px solid #1a2535", padding:"14px 16px" }}>
+                  <div style={{ fontSize:10, letterSpacing:2, color:"#f0b429", textTransform:"uppercase", marginBottom:10 }}>🌅 Matin ({completedMorn}/{MORNING_ROUTINE.length})</div>
+                  {MORNING_ROUTINE.map(r => (
+                    <div key={r.id} onClick={() => toggleRoutine(r.id)} style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 0", cursor:"pointer" }}>
+                      <CheckBox checked={!!checkedRoutine[r.id]} color="#f0b429"/>
+                      <div style={{ fontSize:12, color:checkedRoutine[r.id]?"#4a7a3a":"#b8b0a4", textDecoration:checkedRoutine[r.id]?"line-through":"none" }}>{r.icon} {r.label}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ background:"#0f1520", borderRadius:10, border:"1px solid #1a2535", padding:"14px 16px" }}>
+                  <div style={{ fontSize:10, letterSpacing:2, color:"#8ab4f8", textTransform:"uppercase", marginBottom:10 }}>🌙 Soir ({completedEve}/{EVENING_ROUTINE.length})</div>
+                  {EVENING_ROUTINE.map(r => (
+                    <div key={r.id} onClick={() => toggleRoutine(r.id)} style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 0", cursor:"pointer" }}>
+                      <CheckBox checked={!!checkedRoutine[r.id]} color="#8ab4f8"/>
+                      <div style={{ fontSize:12, color:checkedRoutine[r.id]?"#3a3a7a":"#b8b0a4", textDecoration:checkedRoutine[r.id]?"line-through":"none" }}>{r.icon} {r.label}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div onClick={() => setView("bilan")} style={{ background:"#0d1219", borderRadius:9, border:"1px solid #1a2535", padding:"14px 18px", textAlign:"center", cursor:"pointer" }}>
+                <div style={{ fontSize:12, color:"#c8c0a0" }}>✍️ Faire le bilan de la journée →</div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* DASHBOARD */}
         {view==="dashboard" && (
@@ -916,6 +1083,22 @@ export default function App() {
                       style={{ width:"100%", background:"#0a0c10", border:"1px solid #1a2535", borderRadius:6, padding:"7px 10px", color:"#e8e0d4", fontSize:12, marginBottom:14, outline:"none" }}>
                       {RECURRENCES.map(r => <option key={r.val} value={r.val}>{r.label}</option>)}
                     </select>
+
+                    {goals.length > 0 && (
+                      <>
+                        <div style={{ fontSize:10, color:"#5a6a7a", marginBottom:5 }}>🎯 Objectif lié (Effet Cumulé)</div>
+                        <div style={{ display:"flex", gap:6, marginBottom:14, flexWrap:"wrap" }}>
+                          <div onClick={() => patchPlannerTask(editingTask.id, { goal_id: null })}
+                            style={{ padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:11, color:"#5a6a7a", border:`1px solid ${!editingTask.goal_id?"#5a6a7a":"#1a2535"}` }}>Aucun</div>
+                          {goals.map(g => (
+                            <div key={g.id} onClick={() => patchPlannerTask(editingTask.id, { goal_id: g.id })}
+                              style={{ padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:11, color:g.color,
+                                background: editingTask.goal_id===g.id ? g.color+"22" : "transparent",
+                                border:`1px solid ${editingTask.goal_id===g.id?g.color:"#1a2535"}` }}>{g.title}</div>
+                          ))}
+                        </div>
+                      </>
+                    )}
 
                     <div style={{ display:"flex", gap:8 }}>
                       <button onClick={() => { deletePlannerTask(editingTask.id); setEditingTaskId(null); }}
