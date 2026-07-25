@@ -213,6 +213,8 @@ export default function App() {
   const [dragTaskId, setDragTaskId] = useState(null);
   const [editingTaskId, setEditingTaskId] = useState(null);
   const [showLabelManager, setShowLabelManager] = useState(false);
+  const [showQuickCapture, setShowQuickCapture] = useState(false);
+  const [quickCaptureVal, setQuickCaptureVal] = useState("");
   const [newLabelName, setNewLabelName] = useState("");
   const [newLabelColor, setNewLabelColor] = useState(LABEL_COLORS[0]);
   const [googleToken, setGoogleToken] = useState(null);
@@ -276,6 +278,18 @@ export default function App() {
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(syncInterval); window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onVis); };
   }, [view]);
+
+  // Raccourcis clavier : "n" = Quick Capture, "Échap" = fermer
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      const tag = (e.target?.tagName || "").toLowerCase();
+      const typing = tag === "input" || tag === "textarea" || e.target?.isContentEditable;
+      if (!typing && (e.key === "n" || e.key === "N")) { e.preventDefault(); setShowQuickCapture(true); }
+      else if (e.key === "Escape") { setShowQuickCapture(false); setEditingTaskId(null); }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const saveToDb = (newTasks, newChecks, newRoutine) => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -400,6 +414,18 @@ export default function App() {
     setNewInboxTitle("");
   };
 
+  const quickCapture = async () => {
+    const title = quickCaptureVal.trim();
+    if (!title) { setShowQuickCapture(false); return; }
+    const row = await dbInsert("tasks", {
+      title, priority: "moyenne", recurrence: "aucune",
+      scheduled_date: null, scheduled_time: null, label_id: null, completed: false,
+    });
+    if (row) setPlannerTasks(prev => [...prev, row]);
+    setQuickCaptureVal("");
+    setShowQuickCapture(false);
+  };
+
   const patchPlannerTask = async (id, patch) => {
     setPlannerTasks(prev => prev.map(t => t.id === id ? { ...t, ...patch } : t));
     await dbPatch("tasks", id, patch);
@@ -425,14 +451,18 @@ export default function App() {
     }
   };
 
+  const dayIsFull = (dateKey, excludeId) => tasksForDay(dateKey).filter(t => t.id !== excludeId).length >= 6;
+
   const dropOnDay = async (dateKey) => {
     if (!dragTaskId) return;
+    if (dayIsFull(dateKey, dragTaskId)) { alert("Ce jour a déjà 6 tâches — la limite est atteinte."); setDragTaskId(null); return; }
     await patchPlannerTask(dragTaskId, { scheduled_date: dateKey, scheduled_time: null });
     setDragTaskId(null);
   };
 
   const dropOnSlot = async (dateKey, hour) => {
     if (!dragTaskId) return;
+    if (dayIsFull(dateKey, dragTaskId)) { alert("Ce jour a déjà 6 tâches — la limite est atteinte."); setDragTaskId(null); return; }
     await patchPlannerTask(dragTaskId, { scheduled_date: dateKey, scheduled_time: `${pad2(hour)}:00` });
     setDragTaskId(null);
   };
@@ -567,10 +597,7 @@ export default function App() {
 
   const NAV = [
     { id: "today", label: "🎯 Aujourd'hui" },
-    { id: "dashboard", label: "📋 Dashboard" },
-    { id: "morning", label: "🌅 Matin" },
-    { id: "tasks", label: "✅ Tâches" },
-    { id: "evening", label: "🌙 Soir" },
+    { id: "routines", label: "🌗 Routines" },
     { id: "planner", label: "🗓️ Planificateur" },
     { id: "bilan", label: "✍️ Bilan" },
     { id: "analyse", label: "📊 Analyse" },
@@ -671,15 +698,41 @@ export default function App() {
 
       <div style={{ maxWidth:780, margin:"0 auto", padding:"22px 18px" }}>
 
-        {/* AUJOURD'HUI — vue unifiée */}
+        {/* AUJOURD'HUI — vue unifiée (fusion Aujourd'hui + Dashboard) */}
         {view==="today" && (() => {
           const todayKey = getTodayKey();
           const todayPlannerTasks = plannerTasks.filter(t => t.scheduled_date === todayKey);
+          const doneToday = todayPlannerTasks.filter(t => t.completed).length;
           return (
             <div>
               <div style={{ marginBottom:20 }}>
                 <div style={{ fontSize:10, letterSpacing:4, color:"#68d391", textTransform:"uppercase", marginBottom:5 }}>Vue unifiée</div>
                 <div style={{ fontSize:26, color:"#e8e0d4", fontWeight:"bold", textTransform:"capitalize" }}>{dateStr}</div>
+              </div>
+
+              {/* Jauges */}
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:22 }}>
+                {[
+                  { label:"Routine Matin", done:completedMorn, total:MORNING_ROUTINE.length, color:"#f0b429" },
+                  { label:"Tâches du jour", done:doneToday, total:Math.max(todayPlannerTasks.length,1), color:"#68d391" },
+                  { label:"Routine Soir", done:completedEve, total:EVENING_ROUTINE.length, color:"#8ab4f8" },
+                ].map(({ label,done,total,color }) => {
+                  const pct = Math.round((done/total)*100);
+                  const circ = 2*Math.PI*30;
+                  return (
+                    <div key={label} style={{ background:"#0f1520", borderRadius:10, padding:"18px 12px", border:"1px solid #1a2535", textAlign:"center" }}>
+                      <svg width="70" height="70" viewBox="0 0 70 70" style={{ display:"block", margin:"0 auto 10px" }}>
+                        <circle cx="35" cy="35" r="30" fill="none" stroke="#1a2535" strokeWidth="5"/>
+                        <circle cx="35" cy="35" r="30" fill="none" stroke={color} strokeWidth="5"
+                          strokeDasharray={`${(pct/100)*circ} ${circ}`} strokeLinecap="round"
+                          transform="rotate(-90 35 35)" style={{ transition:"stroke-dasharray 0.5s ease" }}/>
+                        <text x="35" y="39" textAnchor="middle" fill={color} fontSize="14" fontWeight="bold" fontFamily="monospace">{pct}%</text>
+                      </svg>
+                      <div style={{ fontSize:10, color:"#5a6a7a", letterSpacing:2, textTransform:"uppercase" }}>{label}</div>
+                      <div style={{ fontSize:16, color, fontWeight:"bold", marginTop:3 }}>{done}/{total}</div>
+                    </div>
+                  );
+                })}
               </div>
 
               {/* Objectifs — Effet Cumulé */}
@@ -721,33 +774,21 @@ export default function App() {
                 <div style={{ fontSize:10, color:"#3a4a5a", marginTop:10, fontStyle:"italic" }}>💡 Lie une tâche à un objectif depuis l'onglet Planificateur, en cliquant sur la tâche.</div>
               </div>
 
-              {/* 6 tâches du jour */}
+              {/* Tâches du jour (max 6, gérées depuis le Planificateur) */}
               <div style={{ background:"#0f1520", borderRadius:10, border:"1px solid #1a2535", padding:"16px 18px", marginBottom:16 }}>
-                <div style={{ fontSize:10, letterSpacing:3, color:"#68d391", textTransform:"uppercase", marginBottom:12 }}>✅ 6 Tâches du jour ({completedTasks}/6)</div>
-                {tasks.map((t,i) => (
-                  <div key={i} onClick={() => toggleTask(i)} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderBottom:i<5?"1px solid #141e2a":"none", cursor:"pointer" }}>
-                    <CheckBox checked={!!checkedTasks[i]}/>
-                    <div style={{ fontSize:13, color:checkedTasks[i]?"#3a5a3a":"#b8b0a4", textDecoration:checkedTasks[i]?"line-through":"none" }}>{t}</div>
-                  </div>
-                ))}
+                <div style={{ fontSize:10, letterSpacing:3, color:"#68d391", textTransform:"uppercase", marginBottom:12 }}>✅ Tâches du jour ({doneToday}/{todayPlannerTasks.length || 0} · max 6)</div>
+                {todayPlannerTasks.length === 0 && <div style={{ fontSize:11, color:"#3a4a5a", fontStyle:"italic" }}>Aucune tâche planifiée aujourd'hui — ajoute-en depuis le 🗓️ Planificateur.</div>}
+                {todayPlannerTasks.map(t => {
+                  const pr = PRIORITIES.find(p => p.val === t.priority) || PRIORITIES[1];
+                  return (
+                    <div key={t.id} onClick={() => toggleTaskDone(t)} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderBottom:"1px solid #141e2a", cursor:"pointer" }}>
+                      <CheckBox checked={!!t.completed} color={pr.color}/>
+                      {t.scheduled_time && <span style={{ fontSize:10, color:"#8ab4f8", fontFamily:"monospace" }}>{t.scheduled_time.slice(0,5)}</span>}
+                      <div style={{ fontSize:13, flex:1, color:t.completed?"#3a5a3a":"#b8b0a4", textDecoration:t.completed?"line-through":"none" }}>{t.title}</div>
+                    </div>
+                  );
+                })}
               </div>
-
-              {/* Tâches planifiées du jour (Planificateur) */}
-              {todayPlannerTasks.length > 0 && (
-                <div style={{ background:"#0f1520", borderRadius:10, border:"1px solid #1a2535", padding:"16px 18px", marginBottom:16 }}>
-                  <div style={{ fontSize:10, letterSpacing:3, color:"#8ab4f8", textTransform:"uppercase", marginBottom:12 }}>🗓️ Tâches planifiées aujourd'hui</div>
-                  {todayPlannerTasks.map(t => {
-                    const pr = PRIORITIES.find(p => p.val === t.priority) || PRIORITIES[1];
-                    return (
-                      <div key={t.id} onClick={() => toggleTaskDone(t)} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderBottom:"1px solid #141e2a", cursor:"pointer" }}>
-                        <CheckBox checked={!!t.completed} color={pr.color}/>
-                        {t.scheduled_time && <span style={{ fontSize:10, color:"#8ab4f8", fontFamily:"monospace" }}>{t.scheduled_time.slice(0,5)}</span>}
-                        <div style={{ fontSize:13, flex:1, color:t.completed?"#3a5a3a":"#b8b0a4", textDecoration:t.completed?"line-through":"none" }}>{t.title}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
 
               {/* Routines compactes */}
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
@@ -771,66 +812,30 @@ export default function App() {
                 </div>
               </div>
 
-              <div onClick={() => setView("bilan")} style={{ background:"#0d1219", borderRadius:9, border:"1px solid #1a2535", padding:"14px 18px", textAlign:"center", cursor:"pointer" }}>
+              <div onClick={() => setView("bilan")} style={{ background:"#0d1219", borderRadius:9, border:"1px solid #1a2535", padding:"14px 18px", textAlign:"center", cursor:"pointer", marginBottom:12 }}>
                 <div style={{ fontSize:12, color:"#c8c0a0" }}>✍️ Faire le bilan de la journée →</div>
+              </div>
+
+              <div style={{ background:"#0d1219", borderRadius:10, border:"1px solid #1a2535", padding:"16px 20px", textAlign:"center" }}>
+                <div style={{ fontSize:14, color:"#c8c0a0", fontStyle:"italic", lineHeight:1.9 }}>
+                  "La discipline n'est pas une contrainte.<br/>C'est la forme la plus haute de liberté."
+                </div>
+                <div style={{ fontSize:10, color:"#3a4a5a", letterSpacing:3, marginTop:10, textTransform:"uppercase" }}>Système de Discipline Personnelle</div>
               </div>
             </div>
           );
         })()}
 
-        {/* DASHBOARD */}
-        {view==="dashboard" && (
-          <div>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:22 }}>
-              {[
-                { label:"Routine Matin", done:completedMorn, total:MORNING_ROUTINE.length, color:"#f0b429" },
-                { label:"Tâches du jour", done:completedTasks, total:6, color:"#68d391" },
-                { label:"Routine Soir", done:completedEve, total:EVENING_ROUTINE.length, color:"#8ab4f8" },
-              ].map(({ label,done,total,color }) => {
-                const pct = Math.round((done/total)*100);
-                const circ = 2*Math.PI*30;
-                return (
-                  <div key={label} style={{ background:"#0f1520", borderRadius:10, padding:"18px 12px", border:"1px solid #1a2535", textAlign:"center" }}>
-                    <svg width="70" height="70" viewBox="0 0 70 70" style={{ display:"block", margin:"0 auto 10px" }}>
-                      <circle cx="35" cy="35" r="30" fill="none" stroke="#1a2535" strokeWidth="5"/>
-                      <circle cx="35" cy="35" r="30" fill="none" stroke={color} strokeWidth="5"
-                        strokeDasharray={`${(pct/100)*circ} ${circ}`} strokeLinecap="round"
-                        transform="rotate(-90 35 35)" style={{ transition:"stroke-dasharray 0.5s ease" }}/>
-                      <text x="35" y="39" textAnchor="middle" fill={color} fontSize="14" fontWeight="bold" fontFamily="monospace">{pct}%</text>
-                    </svg>
-                    <div style={{ fontSize:10, color:"#5a6a7a", letterSpacing:2, textTransform:"uppercase" }}>{label}</div>
-                    <div style={{ fontSize:16, color, fontWeight:"bold", marginTop:3 }}>{done}/{total}</div>
-                  </div>
-                );
-              })}
-            </div>
-            <div style={{ background:"#0f1520", borderRadius:10, border:"1px solid #1a2535", padding:"16px 18px", marginBottom:16 }}>
-              <div style={{ fontSize:10, letterSpacing:3, color:"#68d391", textTransform:"uppercase", marginBottom:12 }}>6 Tâches du jour</div>
-              {tasks.map((t,i) => (
-                <div key={i} onClick={() => toggleTask(i)} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:i<5?"1px solid #141e2a":"none", cursor:"pointer" }}>
-                  <CheckBox checked={!!checkedTasks[i]}/>
-                  <span style={{ fontSize:10, color:"#3a5a6a", fontFamily:"monospace", flexShrink:0 }}>#{i+1}</span>
-                  <div style={{ fontSize:13, color:checkedTasks[i]?"#3a5a3a":"#b8b0a4", textDecoration:checkedTasks[i]?"line-through":"none" }}>{t}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ background:"#0d1219", borderRadius:10, border:"1px solid #1a2535", padding:"16px 20px", textAlign:"center" }}>
-              <div style={{ fontSize:14, color:"#c8c0a0", fontStyle:"italic", lineHeight:1.9 }}>
-                "La discipline n'est pas une contrainte.<br/>C'est la forme la plus haute de liberté."
-              </div>
-              <div style={{ fontSize:10, color:"#3a4a5a", letterSpacing:3, marginTop:10, textTransform:"uppercase" }}>Système de Discipline Personnelle</div>
-            </div>
-          </div>
-        )}
-
-        {/* MATIN */}
-        {view==="morning" && (
+        {/* ROUTINES — fusion Matin + Soir */}
+        {view==="routines" && (
           <div>
             <div style={{ marginBottom:22 }}>
-              <div style={{ fontSize:10, letterSpacing:4, color:"#f0b429", textTransform:"uppercase", marginBottom:5 }}>Routine Matinale</div>
-              <div style={{ fontSize:26, color:"#e8e0d4", fontWeight:"bold" }}>Énergie & Clarté</div>
-              <div style={{ fontSize:12, color:"#5a6a7a", marginTop:5 }}>{completedMorn}/{MORNING_ROUTINE.length} étapes · 05h50 → 08h30</div>
+              <div style={{ fontSize:10, letterSpacing:4, color:"#f0b429", textTransform:"uppercase", marginBottom:5 }}>Rituels quotidiens</div>
+              <div style={{ fontSize:26, color:"#e8e0d4", fontWeight:"bold" }}>Routines</div>
+              <div style={{ fontSize:12, color:"#5a6a7a", marginTop:5 }}>{completedMorn+completedEve}/{MORNING_ROUTINE.length+EVENING_ROUTINE.length} étapes accomplies</div>
             </div>
+
+            <div style={{ fontSize:11, letterSpacing:2, color:"#f0b429", textTransform:"uppercase", marginBottom:10 }}>🌅 Matin · 05h50 → 08h30 ({completedMorn}/{MORNING_ROUTINE.length})</div>
             {MORNING_ROUTINE.map(r => (
               <div key={r.id} onClick={() => toggleRoutine(r.id)} style={{ display:"flex", gap:14, padding:"14px", marginBottom:8, background:checkedRoutine[r.id]?"#0c1810":"#0f1520", borderRadius:9, border:`1px solid ${checkedRoutine[r.id]?"#2a4a20":"#1a2535"}`, cursor:"pointer", transition:"all 0.2s" }}>
                 <div style={{ flexShrink:0, width:44, textAlign:"center", paddingTop:2 }}>
@@ -844,50 +849,8 @@ export default function App() {
                 <CheckBox checked={!!checkedRoutine[r.id]} color="#f0b429"/>
               </div>
             ))}
-          </div>
-        )}
 
-        {/* TÂCHES */}
-        {view==="tasks" && (
-          <div>
-            <div style={{ marginBottom:22 }}>
-              <div style={{ fontSize:10, letterSpacing:4, color:"#68d391", textTransform:"uppercase", marginBottom:5 }}>Objectifs quotidiens</div>
-              <div style={{ fontSize:26, color:"#e8e0d4", fontWeight:"bold" }}>6 Tâches du jour</div>
-              <div style={{ fontSize:12, color:"#5a6a7a", marginTop:5 }}>{completedTasks}/6 accomplies · Cliquer pour modifier · Sauvegarde auto</div>
-            </div>
-            {tasks.map((t,i) => (
-              <div key={i} style={{ background:"#0f1520", borderRadius:9, border:"1px solid #1a2535", padding:"14px 16px", marginBottom:8, display:"flex", gap:12, alignItems:"center" }}>
-                <div onClick={() => toggleTask(i)} style={{ cursor:"pointer" }}><CheckBox checked={!!checkedTasks[i]}/></div>
-                {editIdx===i ? (
-                  <div style={{ flex:1, display:"flex", gap:8 }}>
-                    <input value={editVal} onChange={e => setEditVal(e.target.value)} onKeyDown={e => e.key==="Enter" && saveEdit()} autoFocus
-                      style={{ flex:1, background:"#0a0c10", border:"1px solid #3a5080", borderRadius:5, padding:"6px 10px", color:"#e8e0d4", fontSize:13, fontFamily:"Georgia,serif", outline:"none" }}/>
-                    <button onClick={saveEdit} style={{ background:"#68d391", border:"none", borderRadius:5, padding:"6px 14px", color:"#0a0c10", fontSize:12, fontWeight:"bold", cursor:"pointer" }}>OK</button>
-                    <button onClick={() => setEditIdx(null)} style={{ background:"#1a2535", border:"none", borderRadius:5, padding:"6px 10px", color:"#5a6a7a", fontSize:12, cursor:"pointer" }}>✕</button>
-                  </div>
-                ) : (
-                  <div style={{ flex:1, cursor:"pointer" }} onClick={() => startEdit(i)}>
-                    <div style={{ fontSize:10, color:"#3a5a6a", fontFamily:"monospace", marginBottom:2 }}>TÂCHE #{i+1}</div>
-                    <div style={{ fontSize:13, color:checkedTasks[i]?"#3a5a3a":"#b8b0a4", textDecoration:checkedTasks[i]?"line-through":"none" }}>{t}</div>
-                  </div>
-                )}
-                {editIdx!==i && <div onClick={() => startEdit(i)} style={{ fontSize:12, color:"#2a3a4a", cursor:"pointer" }}>✏️</div>}
-              </div>
-            ))}
-            <div style={{ background:"#0a0f18", borderRadius:9, border:"1px dashed #1a2535", padding:"12px", textAlign:"center", fontSize:11, color:"#3a4a5a" }}>
-              Cliquer sur le texte d'une tâche pour la modifier · Entrée pour valider
-            </div>
-          </div>
-        )}
-
-        {/* SOIR */}
-        {view==="evening" && (
-          <div>
-            <div style={{ marginBottom:22 }}>
-              <div style={{ fontSize:10, letterSpacing:4, color:"#8ab4f8", textTransform:"uppercase", marginBottom:5 }}>Routine du Soir</div>
-              <div style={{ fontSize:26, color:"#e8e0d4", fontWeight:"bold" }}>Bilan & Apaisement</div>
-              <div style={{ fontSize:12, color:"#5a6a7a", marginTop:5 }}>{completedEve}/{EVENING_ROUTINE.length} étapes · 19h00 → 22h00</div>
-            </div>
+            <div style={{ fontSize:11, letterSpacing:2, color:"#8ab4f8", textTransform:"uppercase", margin:"22px 0 10px" }}>🌙 Soir · 19h00 → 22h00 ({completedEve}/{EVENING_ROUTINE.length})</div>
             {EVENING_ROUTINE.map(r => (
               <div key={r.id} onClick={() => toggleRoutine(r.id)} style={{ display:"flex", gap:14, padding:"18px", marginBottom:10, background:checkedRoutine[r.id]?"#0c1018":"#0f1520", borderRadius:9, border:`1px solid ${checkedRoutine[r.id]?"#2a2a5a":"#1a2535"}`, cursor:"pointer", transition:"all 0.2s" }}>
                 <div style={{ flexShrink:0, width:44, textAlign:"center", paddingTop:2 }}>
@@ -901,7 +864,7 @@ export default function App() {
                 <CheckBox checked={!!checkedRoutine[r.id]} color="#8ab4f8"/>
               </div>
             ))}
-            <div style={{ background:"#0d1018", borderRadius:9, border:"1px solid #1a2030", padding:"16px 18px", textAlign:"center" }}>
+            <div style={{ background:"#0d1018", borderRadius:9, border:"1px solid #1a2030", padding:"16px 18px", textAlign:"center", marginTop:12 }}>
               <div style={{ fontSize:13, color:"#6a7a9a", lineHeight:1.8, fontStyle:"italic" }}>
                 La discipline du soir construit la clarté du matin.
               </div>
@@ -1022,6 +985,7 @@ export default function App() {
                         <div style={{ textAlign:"center", marginBottom:8 }}>
                           <div style={{ fontSize:10, color:isToday?"#68d391":"#5a6a7a", fontFamily:"monospace", textTransform:"uppercase" }}>{day.toLocaleDateString("fr-FR",{weekday:"short"})}</div>
                           <div style={{ fontSize:15, color:isToday?"#68d391":"#c8c0b4", fontWeight:"bold" }}>{day.getDate()}</div>
+                          <div style={{ fontSize:9, color: dayTasks.length>=6 ? "#fb8a4a" : "#3a4a5a", fontFamily:"monospace" }}>{dayTasks.length}/6</div>
                         </div>
                         {eventsForDay(dateKey).map(ev => (
                           <div key={ev.id} style={{ background:"#1a1530", border:"1px solid #3a2a5a", borderRadius:6, padding:"5px 8px", marginBottom:6, fontSize:11, color:"#c084fc" }}>
@@ -1317,6 +1281,26 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {/* Quick Capture — bouton flottant + raccourci "n" */}
+      <div onClick={() => setShowQuickCapture(true)} style={{
+        position:"fixed", bottom:22, right:22, width:52, height:52, borderRadius:"50%",
+        background:"#68d391", color:"#0a0c10", fontSize:26, fontWeight:"bold",
+        display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer",
+        boxShadow:"0 4px 14px #00000066", zIndex:150,
+      }} title="Capture rapide (touche N)">+</div>
+
+      {showQuickCapture && (
+        <div onClick={() => setShowQuickCapture(false)} style={{ position:"fixed", inset:0, background:"#000000aa", display:"flex", alignItems:"flex-start", justifyContent:"center", paddingTop:"18vh", zIndex:200 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background:"#0f1520", border:"1px solid #2a3a4a", borderRadius:10, padding:16, width:380, maxWidth:"90vw" }}>
+            <div style={{ fontSize:10, letterSpacing:2, color:"#68d391", textTransform:"uppercase", marginBottom:10 }}>⚡ Capture rapide → Inbox</div>
+            <input autoFocus value={quickCaptureVal} onChange={e => setQuickCaptureVal(e.target.value)}
+              onKeyDown={e => { if (e.key==="Enter") quickCapture(); if (e.key==="Escape") setShowQuickCapture(false); }}
+              placeholder="Note ou tâche... (Entrée pour valider)"
+              style={{ width:"100%", boxSizing:"border-box", background:"#0a0c10", border:"1px solid #1a2535", borderRadius:6, padding:"10px 12px", color:"#e8e0d4", fontSize:14, outline:"none" }} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
