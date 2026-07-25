@@ -88,14 +88,14 @@ async function dbDelete(table, id) {
 }
 // --- fin helpers Planificateur ---
 
-const MORNING_ROUTINE = [
+const DEFAULT_MORNING_ROUTINE = [
   { id: "m1", time: "05:50", icon: "☀️", label: "Réveil & Hydratation", desc: "Lever immédiat, 1 grand verre d'eau. Pas de téléphone. Respiration profonde 3 min." },
   { id: "m2", time: "06:00", icon: "🏠", label: "Responsabilités de la maison", desc: "1h dédiée aux tâches du foyer — ménage, rangement, ou ce qui est nécessaire. Pleine présence, sans téléphone." },
   { id: "m3", time: "07:00", icon: "🏃", label: "Sport · Douche · Méditation / Visualisation", desc: "1h complète : sport 30 min → douche → méditation et visualisation 15 min — ancrer l'intention du jour, clarté mentale." },
   { id: "m4", time: "08:00", icon: "☕", label: "Petit-déjeuner", desc: "Repas nutritif et conscient. Pas d'écrans. Prendre le temps de bien manger avant de commencer la journée." },
 ];
 
-const EVENING_ROUTINE = [
+const DEFAULT_EVENING_ROUTINE = [
   { id: "e0", time: "19:00", icon: "🚿", label: "Douche", desc: "Couper avec la journée de travail. Douche chaude pour décompresser et se recentrer." },
   { id: "e1", time: "19:20", icon: "📝", label: "Bilan de journée", desc: "15 min — tâches accomplies, état d'esprit, leçons du jour. Qu'est-ce que j'ai bien fait ? Qu'est-ce que j'améliore demain ?" },
   { id: "e2", time: "19:45", icon: "👨‍👩‍👦", label: "Temps famille / social", desc: "Dîner, échanges, présence réelle. Déconnexion totale du travail. Ce temps est sacré." },
@@ -121,6 +121,7 @@ const PRIORITIES = [
 const RECURRENCES = [
   { val: "aucune", label: "Aucune" },
   { val: "quotidienne", label: "Quotidienne" },
+  { val: "ouvrable", label: "Jours ouvrables (lun-ven)" },
   { val: "hebdomadaire", label: "Hebdomadaire" },
   { val: "mensuelle", label: "Mensuelle" },
 ];
@@ -157,6 +158,10 @@ function startOfDay(d = new Date()) { const x = new Date(d); x.setHours(0,0,0,0)
 function nextRecurrenceDate(dateKey, recurrence) {
   const d = new Date(dateKey + "T00:00:00");
   if (recurrence === "quotidienne") d.setDate(d.getDate() + 1);
+  else if (recurrence === "ouvrable") {
+    d.setDate(d.getDate() + 1);
+    while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1); // saute samedi/dimanche
+  }
   else if (recurrence === "hebdomadaire") d.setDate(d.getDate() + 7);
   else if (recurrence === "mensuelle") d.setMonth(d.getMonth() + 1);
   else return null;
@@ -201,6 +206,9 @@ export default function App() {
   const [editVal, setEditVal] = useState("");
   const [checkedTasks, setCheckedTasks] = useState({});
   const [checkedRoutine, setCheckedRoutine] = useState({});
+  const [morningRoutine, setMorningRoutine] = useState(DEFAULT_MORNING_ROUTINE);
+  const [eveningRoutine, setEveningRoutine] = useState(DEFAULT_EVENING_ROUTINE);
+  const [editingRoutineId, setEditingRoutineId] = useState(null);
   const [now, setNow] = useState(new Date());
   const [syncing, setSyncing] = useState(false);
   const [syncOk, setSyncOk] = useState(null);
@@ -269,6 +277,7 @@ export default function App() {
         }
         await refreshToday();
         await loadGoals();
+        await loadRoutines();
       } catch(e) {
         setSyncOk(false);
         setSyncing(false);
@@ -281,7 +290,7 @@ export default function App() {
 
   // Resynchronisation auto : toutes les 30s + à chaque retour sur l'onglet/app (multi-appareils)
   useEffect(() => {
-    const resync = () => { refreshToday(); loadGoals(); if (view === "planner" || view === "today") loadPlanner(); };
+    const resync = () => { refreshToday(); loadGoals(); if (view === "routines") loadRoutines(); if (view === "planner" || view === "today") loadPlanner(); };
     const syncInterval = setInterval(resync, 30000);
     const onFocus = () => resync();
     window.addEventListener("focus", onFocus);
@@ -337,6 +346,16 @@ export default function App() {
   const saveEdit = () => { const t = [...tasks]; t[editIdx] = editVal; saveTasks(t); setEditIdx(null); };
 
   const todayKeyGlobal = getTodayKey();
+  const MORNING_ROUTINE = morningRoutine;
+  const EVENING_ROUTINE = eveningRoutine;
+  const routineSpanHours = (list) => {
+    if (!list.length) return [];
+    const hours = list.map(r => parseInt(r.time.slice(0,2),10));
+    const min = Math.min(...hours), max = Math.max(...hours);
+    const arr = []; for (let h = min; h <= max; h++) arr.push(h);
+    return arr;
+  };
+  const blockedHours = new Set([...routineSpanHours(morningRoutine), ...routineSpanHours(eveningRoutine)]);
   const todayPlannerTasksGlobal = plannerTasks.filter(t => t.scheduled_date === todayKeyGlobal);
   const completedTasks = todayPlannerTasksGlobal.filter(t => t.completed).length;
   const completedMorn = MORNING_ROUTINE.filter(r => checkedRoutine[r.id]).length;
@@ -463,6 +482,7 @@ export default function App() {
   };
 
   const toggleTaskDone = async (task) => {
+    if (!task.scheduled_date) return; // les tâches de l'inbox ne sont pas cochables
     const completed = !task.completed;
     await patchPlannerTask(task.id, { completed });
     if (completed && task.recurrence && task.recurrence !== "aucune" && task.scheduled_date) {
@@ -470,7 +490,8 @@ export default function App() {
       if (nextDate) {
         const row = await dbInsert("tasks", {
           title: task.title, priority: task.priority, recurrence: task.recurrence,
-          scheduled_date: nextDate, scheduled_time: task.scheduled_time, label_id: task.label_id, completed: false,
+          scheduled_date: nextDate, scheduled_time: task.scheduled_time, label_id: task.label_id,
+          duration_minutes: task.duration_minutes, goal_id: task.goal_id, completed: false,
         });
         if (row) setPlannerTasks(prev => [...prev, row]);
       }
@@ -575,7 +596,7 @@ export default function App() {
     const time = task.scheduled_time || "09:00:00";
     const startDT = `${task.scheduled_date}T${time.length===5?time+":00":time}`;
     const start = new Date(startDT);
-    const end = new Date(start.getTime() + 60*60*1000);
+    const end = new Date(start.getTime() + (task.duration_minutes || 30)*60*1000);
     try {
       await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events`, {
         method: "POST",
@@ -597,6 +618,40 @@ export default function App() {
   // --- fin Google Calendar ---
 
   // --- Objectifs (Effet Cumulé) ---
+  // --- Routines éditables ---
+  const loadRoutines = async () => {
+    const rows = await dbList("routine_items", "&order=sort_order.asc");
+    if (rows && rows.length) {
+      setMorningRoutine(rows.filter(r => r.period === "morning").map(r => ({ id:r.id, time:r.time, icon:r.icon, label:r.label, desc:r.description })));
+      setEveningRoutine(rows.filter(r => r.period === "evening").map(r => ({ id:r.id, time:r.time, icon:r.icon, label:r.label, desc:r.description })));
+    }
+  };
+
+  const addRoutineItem = async (period) => {
+    const list = period === "morning" ? morningRoutine : eveningRoutine;
+    const row = await dbInsert("routine_items", { period, time:"08:00", icon:"⭐", label:"Nouvelle étape", description:"", sort_order: list.length+1 });
+    if (row) {
+      const item = { id:row.id, time:row.time, icon:row.icon, label:row.label, desc:row.description };
+      if (period === "morning") setMorningRoutine(prev => [...prev, item]); else setEveningRoutine(prev => [...prev, item]);
+      setEditingRoutineId(row.id);
+    }
+  };
+
+  const patchRoutineItem = async (period, id, patch) => {
+    const setList = period === "morning" ? setMorningRoutine : setEveningRoutine;
+    setList(prev => prev.map(r => r.id === id ? { ...r, ...patch, desc: patch.description !== undefined ? patch.description : r.desc } : r));
+    const dbPatchBody = { ...patch };
+    if (dbPatchBody.desc !== undefined) { dbPatchBody.description = dbPatchBody.desc; delete dbPatchBody.desc; }
+    await dbPatch("routine_items", id, dbPatchBody);
+  };
+
+  const deleteRoutineItem = async (period, id) => {
+    const setList = period === "morning" ? setMorningRoutine : setEveningRoutine;
+    setList(prev => prev.filter(r => r.id !== id));
+    await dbDelete("routine_items", id);
+  };
+  // --- fin Routines éditables ---
+
   const loadGoals = async () => {
     setGoalsLoading(true);
     const g = await dbList("goals", "&order=created_at.asc");
@@ -865,51 +920,69 @@ export default function App() {
           );
         })()}
 
-        {/* ROUTINES — fusion Matin + Soir */}
-        {view==="routines" && (
-          <div>
-            <div style={{ marginBottom:22 }}>
-              <div style={{ fontSize:10, letterSpacing:4, color:"#f0b429", textTransform:"uppercase", marginBottom:5 }}>Rituels quotidiens</div>
-              <div style={{ fontSize:26, color:"#e8e0d4", fontWeight:"bold" }}>Routines</div>
-              <div style={{ fontSize:12, color:"#5a6a7a", marginTop:5 }}>{completedMorn+completedEve}/{MORNING_ROUTINE.length+EVENING_ROUTINE.length} étapes accomplies</div>
-            </div>
+        {/* ROUTINES — fusion Matin + Soir, éditable */}
+        {view==="routines" && (() => {
+          const RoutineRow = ({ r, period, color, bgOn }) => {
+            const isEditing = editingRoutineId === r.id;
+            if (isEditing) {
+              return (
+                <div style={{ padding:"12px", marginBottom:8, background:"#0a0f18", borderRadius:9, border:`1px solid ${color}` }}>
+                  <div style={{ display:"flex", gap:6, marginBottom:6 }}>
+                    <input value={r.icon} onChange={e => patchRoutineItem(period, r.id, { icon: e.target.value })} style={{ width:40, background:"#0a0c10", border:"1px solid #1a2535", borderRadius:5, padding:"6px", color:"#e8e0d4", fontSize:14, textAlign:"center", outline:"none" }} />
+                    <input type="time" value={r.time} onChange={e => patchRoutineItem(period, r.id, { time: e.target.value })} style={{ width:100, background:"#0a0c10", border:"1px solid #1a2535", borderRadius:5, padding:"6px", color:"#e8e0d4", fontSize:12, outline:"none" }} />
+                    <input value={r.label} onChange={e => patchRoutineItem(period, r.id, { label: e.target.value })} style={{ flex:1, background:"#0a0c10", border:"1px solid #1a2535", borderRadius:5, padding:"6px 8px", color:"#e8e0d4", fontSize:13, outline:"none" }} />
+                  </div>
+                  <textarea value={r.desc} onChange={e => patchRoutineItem(period, r.id, { desc: e.target.value })} rows={2}
+                    style={{ width:"100%", boxSizing:"border-box", background:"#0a0c10", border:"1px solid #1a2535", borderRadius:5, padding:"6px 8px", color:"#b8b0a4", fontSize:12, outline:"none", resize:"vertical", marginBottom:6 }} />
+                  <div style={{ display:"flex", gap:6 }}>
+                    <button onClick={() => setEditingRoutineId(null)} style={{ flex:1, background:"#68d391", border:"none", borderRadius:5, padding:"6px 0", color:"#0a0c10", fontSize:12, fontWeight:"bold", cursor:"pointer" }}>OK</button>
+                    <button onClick={() => deleteRoutineItem(period, r.id)} style={{ background:"#2a1520", border:"1px solid #4a2030", borderRadius:5, padding:"6px 12px", color:"#fb8a4a", fontSize:12, cursor:"pointer" }}>🗑️</button>
+                  </div>
+                </div>
+              );
+            }
+            return (
+              <div style={{ display:"flex", gap:14, padding:"14px", marginBottom:8, background:checkedRoutine[r.id]?bgOn:"#0f1520", borderRadius:9, border:`1px solid ${checkedRoutine[r.id]?color+"55":"#1a2535"}`, transition:"all 0.2s" }}>
+                <div onClick={() => toggleRoutine(r.id)} style={{ display:"flex", gap:14, flex:1, cursor:"pointer" }}>
+                  <div style={{ flexShrink:0, width:44, textAlign:"center", paddingTop:2 }}>
+                    <div style={{ fontSize:20 }}>{r.icon}</div>
+                    <div style={{ fontSize:10, color, fontFamily:"monospace", marginTop:2 }}>{r.time}</div>
+                  </div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:14, fontWeight:"bold", marginBottom:4, color:checkedRoutine[r.id]?"#4a7a3a":"#d4c9a0", textDecoration:checkedRoutine[r.id]?"line-through":"none" }}>{r.label}</div>
+                    <div style={{ fontSize:12, color:"#5a6a7a", lineHeight:1.5 }}>{r.desc}</div>
+                  </div>
+                  <CheckBox checked={!!checkedRoutine[r.id]} color={color}/>
+                </div>
+                <div onClick={() => setEditingRoutineId(r.id)} style={{ fontSize:12, color:"#2a3a4a", cursor:"pointer", paddingLeft:6 }}>✏️</div>
+              </div>
+            );
+          };
 
-            <div style={{ fontSize:11, letterSpacing:2, color:"#f0b429", textTransform:"uppercase", marginBottom:10 }}>🌅 Matin · 05h50 → 08h30 ({completedMorn}/{MORNING_ROUTINE.length})</div>
-            {MORNING_ROUTINE.map(r => (
-              <div key={r.id} onClick={() => toggleRoutine(r.id)} style={{ display:"flex", gap:14, padding:"14px", marginBottom:8, background:checkedRoutine[r.id]?"#0c1810":"#0f1520", borderRadius:9, border:`1px solid ${checkedRoutine[r.id]?"#2a4a20":"#1a2535"}`, cursor:"pointer", transition:"all 0.2s" }}>
-                <div style={{ flexShrink:0, width:44, textAlign:"center", paddingTop:2 }}>
-                  <div style={{ fontSize:20 }}>{r.icon}</div>
-                  <div style={{ fontSize:10, color:"#f0b429", fontFamily:"monospace", marginTop:2 }}>{r.time}</div>
-                </div>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:14, fontWeight:"bold", marginBottom:4, color:checkedRoutine[r.id]?"#4a7a3a":"#d4c9a0", textDecoration:checkedRoutine[r.id]?"line-through":"none" }}>{r.label}</div>
-                  <div style={{ fontSize:12, color:"#5a6a7a", lineHeight:1.5 }}>{r.desc}</div>
-                </div>
-                <CheckBox checked={!!checkedRoutine[r.id]} color="#f0b429"/>
+          return (
+            <div>
+              <div style={{ marginBottom:22 }}>
+                <div style={{ fontSize:10, letterSpacing:4, color:"#f0b429", textTransform:"uppercase", marginBottom:5 }}>Rituels quotidiens</div>
+                <div style={{ fontSize:26, color:"#e8e0d4", fontWeight:"bold" }}>Routines</div>
+                <div style={{ fontSize:12, color:"#5a6a7a", marginTop:5 }}>{completedMorn+completedEve}/{MORNING_ROUTINE.length+EVENING_ROUTINE.length} étapes accomplies · clique ✏️ pour modifier</div>
               </div>
-            ))}
 
-            <div style={{ fontSize:11, letterSpacing:2, color:"#8ab4f8", textTransform:"uppercase", margin:"22px 0 10px" }}>🌙 Soir · 19h00 → 22h00 ({completedEve}/{EVENING_ROUTINE.length})</div>
-            {EVENING_ROUTINE.map(r => (
-              <div key={r.id} onClick={() => toggleRoutine(r.id)} style={{ display:"flex", gap:14, padding:"18px", marginBottom:10, background:checkedRoutine[r.id]?"#0c1018":"#0f1520", borderRadius:9, border:`1px solid ${checkedRoutine[r.id]?"#2a2a5a":"#1a2535"}`, cursor:"pointer", transition:"all 0.2s" }}>
-                <div style={{ flexShrink:0, width:44, textAlign:"center", paddingTop:2 }}>
-                  <div style={{ fontSize:22 }}>{r.icon}</div>
-                  <div style={{ fontSize:10, color:"#8ab4f8", fontFamily:"monospace", marginTop:2 }}>{r.time}</div>
+              <div style={{ fontSize:11, letterSpacing:2, color:"#f0b429", textTransform:"uppercase", marginBottom:10 }}>🌅 Matin ({completedMorn}/{MORNING_ROUTINE.length})</div>
+              {MORNING_ROUTINE.map(r => <RoutineRow key={r.id} r={r} period="morning" color="#f0b429" bgOn="#0c1810" />)}
+              <button onClick={() => addRoutineItem("morning")} style={{ width:"100%", background:"#0a0f18", border:"1px dashed #1a2535", borderRadius:9, padding:"8px", color:"#3a4a5a", fontSize:12, cursor:"pointer", marginBottom:20 }}>+ Ajouter une étape matin</button>
+
+              <div style={{ fontSize:11, letterSpacing:2, color:"#8ab4f8", textTransform:"uppercase", margin:"22px 0 10px" }}>🌙 Soir ({completedEve}/{EVENING_ROUTINE.length})</div>
+              {EVENING_ROUTINE.map(r => <RoutineRow key={r.id} r={r} period="evening" color="#8ab4f8" bgOn="#0c1018" />)}
+              <button onClick={() => addRoutineItem("evening")} style={{ width:"100%", background:"#0a0f18", border:"1px dashed #1a2535", borderRadius:9, padding:"8px", color:"#3a4a5a", fontSize:12, cursor:"pointer", marginBottom:20 }}>+ Ajouter une étape soir</button>
+
+              <div style={{ background:"#0d1018", borderRadius:9, border:"1px solid #1a2030", padding:"16px 18px", textAlign:"center", marginTop:12 }}>
+                <div style={{ fontSize:13, color:"#6a7a9a", lineHeight:1.8, fontStyle:"italic" }}>
+                  La discipline du soir construit la clarté du matin.
                 </div>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:14, fontWeight:"bold", marginBottom:5, color:checkedRoutine[r.id]?"#3a3a7a":"#d4c9a0", textDecoration:checkedRoutine[r.id]?"line-through":"none" }}>{r.label}</div>
-                  <div style={{ fontSize:12, color:"#5a6a7a", lineHeight:1.6 }}>{r.desc}</div>
-                </div>
-                <CheckBox checked={!!checkedRoutine[r.id]} color="#8ab4f8"/>
-              </div>
-            ))}
-            <div style={{ background:"#0d1018", borderRadius:9, border:"1px solid #1a2030", padding:"16px 18px", textAlign:"center", marginTop:12 }}>
-              <div style={{ fontSize:13, color:"#6a7a9a", lineHeight:1.8, fontStyle:"italic" }}>
-                La discipline du soir construit la clarté du matin.
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* PLANIFICATEUR */}
         {view==="planner" && (() => {
@@ -918,7 +991,7 @@ export default function App() {
             : `${weekDays[0].toLocaleDateString("fr-FR",{day:"numeric",month:"short"})} — ${weekDays[weekDays.length-1].toLocaleDateString("fr-FR",{day:"numeric",month:"short"})}`;
           const editingTask = plannerTasks.find(t => t.id === editingTaskId);
 
-          const TaskCard = ({ task }) => {
+          const TaskCard = ({ task, checkable = true }) => {
             const lbl = labelById(task.label_id);
             const pr = PRIORITIES.find(p => p.val === task.priority) || PRIORITIES[1];
             return (
@@ -932,14 +1005,19 @@ export default function App() {
                 }}
               >
                 <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                  <div onClick={(e) => { e.stopPropagation(); toggleTaskDone(task); }} style={{ cursor:"pointer" }}>
-                    <CheckBox checked={!!task.completed} color={pr.color} />
-                  </div>
+                  {checkable ? (
+                    <div onClick={(e) => { e.stopPropagation(); toggleTaskDone(task); }} style={{ cursor:"pointer" }}>
+                      <CheckBox checked={!!task.completed} color={pr.color} />
+                    </div>
+                  ) : (
+                    <div style={{ width:10, height:10, borderRadius:"50%", border:`2px solid ${pr.color}55`, flexShrink:0 }} title="Planifie cette tâche sur une date pour pouvoir la cocher" />
+                  )}
                   <div style={{ flex:1, fontSize:12, color: task.completed?"#3a5a3a":"#c8c0b4", textDecoration:task.completed?"line-through":"none" }}>
                     {task.title}
                   </div>
                 </div>
                 <div style={{ display:"flex", gap:6, marginTop:5, flexWrap:"wrap" }}>
+                  {task.duration_minutes && <span style={{ fontSize:9, color:"#5a6a7a", fontFamily:"monospace" }}>⏱ {task.duration_minutes}min</span>}
                   {task.scheduled_time && <span style={{ fontSize:9, color:"#8ab4f8", fontFamily:"monospace" }}>{task.scheduled_time.slice(0,5)}</span>}
                   {lbl && <span style={{ fontSize:9, color:lbl.color, background:lbl.color+"22", borderRadius:4, padding:"1px 6px" }}>{lbl.name}</span>}
                   {task.recurrence!=="aucune" && <span style={{ fontSize:9, color:"#5a6a7a" }}>🔁 {RECURRENCES.find(r=>r.val===task.recurrence)?.label}</span>}
@@ -1022,7 +1100,7 @@ export default function App() {
                         style={{ flex:1, background:"#0a0c10", border:"1px solid #1a2535", borderRadius:5, padding:"6px 8px", color:"#e8e0d4", fontSize:11, outline:"none" }} />
                       <button onClick={addInboxTask} style={{ background:"#1a2535", border:"none", borderRadius:5, color:"#68d391", padding:"0 8px", cursor:"pointer" }}>+</button>
                     </div>
-                    {inboxTasks.map(t => <TaskCard key={t.id} task={t} />)}
+                    {inboxTasks.map(t => <TaskCard key={t.id} task={t} checkable={false} />)}
                     {inboxTasks.length===0 && <div style={{ fontSize:11, color:"#2a3a4a", textAlign:"center", marginTop:10 }}>Vide</div>}
                   </div>
 
@@ -1051,12 +1129,17 @@ export default function App() {
                         <div style={{ borderTop:"1px solid #141e2a", marginTop:4, paddingTop:4 }}>
                           {PLANNER_HOURS.map(h => {
                             const slotTasks = dayTasks.filter(t => t.scheduled_time && parseInt(t.scheduled_time.slice(0,2),10)===h);
+                            const blocked = blockedHours.has(h);
                             return (
-                              <div key={h} onDragOver={e => e.preventDefault()} onDrop={(e) => { e.stopPropagation(); dropOnSlot(dateKey, h); }}
-                                onClick={() => addTaskAt(dateKey, `${pad2(h)}:00`)}
-                                style={{ minHeight:26, borderBottom:"1px solid #10182422", padding:"2px 0", cursor:"pointer" }}
-                                title="Cliquer pour un time-blocking à cette heure">
-                                <div style={{ fontSize:8, color:"#2a3a4a", fontFamily:"monospace" }}>{pad2(h)}h</div>
+                              <div key={h}
+                                onDragOver={e => { if (!blocked) e.preventDefault(); }}
+                                onDrop={(e) => { e.stopPropagation(); if (!blocked) dropOnSlot(dateKey, h); }}
+                                onClick={() => { if (!blocked) addTaskAt(dateKey, `${pad2(h)}:00`); }}
+                                style={{ minHeight:26, borderBottom:"1px solid #10182422", padding:"2px 0",
+                                  cursor: blocked ? "not-allowed" : "pointer",
+                                  background: blocked ? "#1a141422" : "transparent" }}
+                                title={blocked ? "Créneau réservé à une routine" : "Cliquer pour un time-blocking à cette heure"}>
+                                <div style={{ fontSize:8, color: blocked ? "#5a4a3a" : "#2a3a4a", fontFamily:"monospace" }}>{pad2(h)}h{blocked ? " 🔒" : ""}</div>
                                 {slotTasks.map(t => <TaskCard key={t.id} task={t} />)}
                               </div>
                             );
@@ -1085,6 +1168,17 @@ export default function App() {
                         style={{ width:90, background:"#0a0c10", border:"1px solid #1a2535", borderRadius:6, padding:"7px 8px", color:"#e8e0d4", fontSize:12, outline:"none" }} />
                     </div>
                     {!editingTask.scheduled_date && <div style={{ fontSize:10, color:"#3a4a5a", marginBottom:10, fontStyle:"italic" }}>Sans date = reste dans l'Inbox</div>}
+
+                    <div style={{ fontSize:10, color:"#5a6a7a", marginBottom:5 }}>⏱ Durée</div>
+                    <div style={{ display:"flex", gap:6, marginBottom:10 }}>
+                      {[15,30,45,60,90,120].map(m => (
+                        <div key={m} onClick={() => patchPlannerTask(editingTask.id, { duration_minutes: m })}
+                          style={{ flex:1, textAlign:"center", padding:"5px 0", borderRadius:6, cursor:"pointer", fontSize:10,
+                            background: editingTask.duration_minutes===m ? "#8ab4f822" : "#0a0f18",
+                            border:`1px solid ${editingTask.duration_minutes===m?"#8ab4f8":"#1a2535"}`,
+                            color: editingTask.duration_minutes===m?"#8ab4f8":"#5a6a7a" }}>{m>=60?`${m/60}h${m%60||""}`:`${m}m`}</div>
+                      ))}
+                    </div>
 
                     <div style={{ fontSize:10, color:"#5a6a7a", marginBottom:5 }}>Priorité</div>
                     <div style={{ display:"flex", gap:6, marginBottom:10 }}>
