@@ -209,6 +209,12 @@ export default function App() {
   const [morningRoutine, setMorningRoutine] = useState(DEFAULT_MORNING_ROUTINE);
   const [eveningRoutine, setEveningRoutine] = useState(DEFAULT_EVENING_ROUTINE);
   const [editingRoutineId, setEditingRoutineId] = useState(null);
+  const [settings, setSettings] = useState({ buffer_minutes:10, workday_start:"08:00", workday_end:"20:00", auto_reschedule:true });
+  const [habits, setHabits] = useState([]);
+  const [habitCompletions, setHabitCompletions] = useState({}); // habit_id -> [date_key,...]
+  const [newHabitTitle, setNewHabitTitle] = useState("");
+  const [autoScheduling, setAutoScheduling] = useState(false);
+  const rescheduledRef = useRef(false);
   const [now, setNow] = useState(new Date());
   const [syncing, setSyncing] = useState(false);
   const [syncOk, setSyncOk] = useState(null);
@@ -278,6 +284,8 @@ export default function App() {
         await refreshToday();
         await loadGoals();
         await loadRoutines();
+        await loadSettings();
+        await loadHabits();
       } catch(e) {
         setSyncOk(false);
         setSyncing(false);
@@ -447,6 +455,10 @@ export default function App() {
     if (view !== "planner" && view !== "today") return;
     loadPlanner();
   }, [view]);
+
+  useEffect(() => {
+    if (plannerTasks.length > 0 && !rescheduledRef.current) runAutoReschedule();
+  }, [plannerTasks.length]);
 
   const addInboxTask = async () => {
     const title = newInboxTitle.trim();
@@ -618,6 +630,125 @@ export default function App() {
   // --- fin Google Calendar ---
 
   // --- Objectifs (Effet Cumulé) ---
+  // --- Paramètres ---
+  const loadSettings = async () => {
+    const rows = await dbList("app_settings");
+    if (rows && rows[0]) setSettings(rows[0]);
+  };
+  const patchSettings = async (patch) => {
+    setSettings(prev => ({ ...prev, ...patch }));
+    await dbPatch("app_settings", 1, patch);
+  };
+  // --- fin Paramètres ---
+
+  // --- Habitudes (Life) ---
+  const loadHabits = async () => {
+    const [h, c] = await Promise.all([
+      dbList("habits", "&order=created_at.asc"),
+      dbList("habit_completions", "&order=date_key.desc"),
+    ]);
+    setHabits(h || []);
+    const map = {};
+    (c || []).forEach(row => { (map[row.habit_id] = map[row.habit_id] || []).push(row.date_key); });
+    setHabitCompletions(map);
+  };
+  const addHabit = async () => {
+    const title = newHabitTitle.trim();
+    if (!title) return;
+    const row = await dbInsert("habits", { title, color: LABEL_COLORS[habits.length % LABEL_COLORS.length] });
+    if (row) setHabits(prev => [...prev, row]);
+    setNewHabitTitle("");
+  };
+  const deleteHabit = async (id) => {
+    setHabits(prev => prev.filter(h => h.id !== id));
+    await dbDelete("habits", id);
+  };
+  const toggleHabitToday = async (habit) => {
+    const todayKey = getTodayKey();
+    const done = (habitCompletions[habit.id] || []).includes(todayKey);
+    if (done) {
+      const res = await dbList("habit_completions", `&habit_id=eq.${habit.id}&date_key=eq.${todayKey}`);
+      if (res && res[0]) await dbDelete("habit_completions", res[0].id);
+      setHabitCompletions(prev => ({ ...prev, [habit.id]: (prev[habit.id]||[]).filter(d => d !== todayKey) }));
+    } else {
+      const row = await dbInsert("habit_completions", { habit_id: habit.id, date_key: todayKey });
+      if (row) setHabitCompletions(prev => ({ ...prev, [habit.id]: [...(prev[habit.id]||[]), todayKey] }));
+    }
+  };
+  const habitStreak = (habitId) => {
+    const dates = new Set(habitCompletions[habitId] || []);
+    let streak = 0; const d = new Date();
+    while (dates.has(toDateKey(d))) { streak++; d.setDate(d.getDate()-1); }
+    return streak;
+  };
+  // --- fin Habitudes ---
+
+  // --- Auto-scheduling / Buffer / Replanification / Time tracking ---
+  const isSlotFree = (dateKey, hour, durationMin, existingTasksThatDay, googleEventsThatDay) => {
+    if (blockedHours.has(hour)) return false;
+    const bufferH = settings.buffer_minutes / 60;
+    const slotStart = hour, slotEnd = hour + Math.max(durationMin/60, 0.5);
+    for (const t of existingTasksThatDay) {
+      if (!t.scheduled_time) continue;
+      const tH = parseInt(t.scheduled_time.slice(0,2),10) + parseInt(t.scheduled_time.slice(3,5),10)/60;
+      const tEnd = tH + (t.duration_minutes||30)/60;
+      if (slotStart < tEnd + bufferH && slotEnd + bufferH > tH) return false;
+    }
+    for (const ev of googleEventsThatDay) {
+      const s = ev.start?.dateTime; if (!s) continue;
+      const evStart = new Date(s), evEnd = new Date(ev.end?.dateTime || s);
+      const evH = evStart.getHours() + evStart.getMinutes()/60;
+      const evEndH = evEnd.getHours() + evEnd.getMinutes()/60;
+      if (slotStart < evEndH + bufferH && slotEnd + bufferH > evH) return false;
+    }
+    return true;
+  };
+
+  const findNextFreeSlot = (fromDateKey, durationMin, excludeTaskId) => {
+    const startH = parseInt(settings.workday_start.slice(0,2),10);
+    const endH = parseInt(settings.workday_end.slice(0,2),10);
+    for (let dayOffset = 0; dayOffset < 21; dayOffset++) {
+      const d = new Date(fromDateKey + "T00:00:00"); d.setDate(d.getDate() + dayOffset);
+      const dateKey = toDateKey(d);
+      const dayTasksList = plannerTasks.filter(t => t.scheduled_date === dateKey && t.id !== excludeTaskId);
+      if (dayTasksList.length >= 6) continue;
+      const dayEvents = googleEvents.filter(ev => { const s = ev.start?.dateTime || ev.start?.date; return s && s.slice(0,10) === dateKey; });
+      for (let h = startH; h < endH; h++) {
+        if (isSlotFree(dateKey, h, durationMin, dayTasksList, dayEvents)) return { dateKey, time: `${pad2(h)}:00` };
+      }
+    }
+    return null;
+  };
+
+  const autoScheduleInbox = async () => {
+    setAutoScheduling(true);
+    const todayKey = getTodayKey();
+    for (const task of inboxTasks) {
+      const slot = findNextFreeSlot(todayKey, task.duration_minutes || 30, task.id);
+      if (slot) await patchPlannerTask(task.id, { scheduled_date: slot.dateKey, scheduled_time: slot.time });
+    }
+    setAutoScheduling(false);
+  };
+
+  const runAutoReschedule = async () => {
+    if (rescheduledRef.current || !settings.auto_reschedule) return;
+    rescheduledRef.current = true;
+    const todayKey = getTodayKey();
+    const late = plannerTasks.filter(t => t.scheduled_date && t.scheduled_date < todayKey && !t.completed);
+    for (const task of late) {
+      const slot = findNextFreeSlot(todayKey, task.duration_minutes || 30, task.id);
+      if (slot) await patchPlannerTask(task.id, { scheduled_date: slot.dateKey, scheduled_time: slot.time });
+    }
+  };
+
+  const startTimer = (task) => patchPlannerTask(task.id, { timer_started_at: new Date().toISOString() });
+  const stopTimer = (task) => {
+    if (!task.timer_started_at) return;
+    const elapsedMin = Math.max(1, Math.round((Date.now() - new Date(task.timer_started_at).getTime()) / 60000));
+    patchPlannerTask(task.id, { timer_started_at: null, time_spent_minutes: (task.time_spent_minutes || 0) + elapsedMin });
+  };
+  // --- fin Auto-scheduling ---
+
   // --- Routines éditables ---
   const loadRoutines = async () => {
     const rows = await dbList("routine_items", "&order=sort_order.asc");
@@ -690,8 +821,10 @@ export default function App() {
     { id: "today", label: "🎯 Aujourd'hui" },
     { id: "planner", label: "🗓️ Planificateur" },
     { id: "routines", label: "🌗 Routines" },
+    { id: "life", label: "🌱 Life" },
     { id: "bilan", label: "✍️ Bilan" },
     { id: "analyse", label: "📊 Analyse" },
+    { id: "settings", label: "⚙️ Paramètres" },
   ];
 
   const CheckBox = ({ checked, color = "#68d391" }) => (
@@ -1055,6 +1188,11 @@ export default function App() {
                   <span style={{ fontSize:13, color:"#c8c0b4", fontFamily:"monospace", textTransform:"capitalize" }}>{rangeLabel}</span>
                   <button onClick={() => setPlannerStart(startOfDay())} style={{ background:"#0f1520", border:"1px solid #1a2535", borderRadius:6, color:"#5a6a7a", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>Aujourd'hui</button>
                   <button onClick={() => setShowLabelManager(s => !s)} style={{ background:"#0f1520", border:"1px solid #1a2535", borderRadius:6, color:"#c084fc", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>🏷️ Étiquettes</button>
+                  {inboxTasks.length > 0 && (
+                    <button onClick={autoScheduleInbox} disabled={autoScheduling} style={{ background:"#0f1a12", border:"1px solid #2a4a20", borderRadius:6, color:"#68d391", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>
+                      {autoScheduling ? "⟳ Planification..." : "🪄 Auto-planifier l'inbox"}
+                    </button>
+                  )}
                   {googleToken ? (
                     <button onClick={disconnectGoogle} style={{ background:"#0d1a12", border:"1px solid #2a4a20", borderRadius:6, color:"#68d391", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>📅 Google connecté {googleLoading?"⟳":""}</button>
                   ) : (
@@ -1202,6 +1340,18 @@ export default function App() {
                       ))}
                     </div>
 
+                    <div style={{ fontSize:10, color:"#5a6a7a", marginBottom:5 }}>⏳ Temps passé</div>
+                    <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:14, background:"#0a0f18", border:"1px solid #1a2535", borderRadius:6, padding:"8px 10px" }}>
+                      <span style={{ fontSize:12, color:"#c8c0b4", fontFamily:"monospace", flex:1 }}>
+                        {editingTask.timer_started_at ? "⟳ Chrono en cours..." : `${editingTask.time_spent_minutes || 0} min cumulées`}
+                      </span>
+                      {editingTask.timer_started_at ? (
+                        <button onClick={() => stopTimer(editingTask)} style={{ background:"#fb8a4a", border:"none", borderRadius:5, padding:"5px 12px", color:"#0a0c10", fontSize:11, fontWeight:"bold", cursor:"pointer" }}>⏹ Stop</button>
+                      ) : (
+                        <button onClick={() => startTimer(editingTask)} style={{ background:"#68d391", border:"none", borderRadius:5, padding:"5px 12px", color:"#0a0c10", fontSize:11, fontWeight:"bold", cursor:"pointer" }}>▶ Démarrer</button>
+                      )}
+                    </div>
+
                     <div style={{ fontSize:10, color:"#5a6a7a", marginBottom:5 }}>Récurrence</div>
                     <select value={editingTask.recurrence} onChange={e => patchPlannerTask(editingTask.id, { recurrence: e.target.value })}
                       style={{ width:"100%", background:"#0a0c10", border:"1px solid #1a2535", borderRadius:6, padding:"7px 10px", color:"#e8e0d4", fontSize:12, marginBottom:14, outline:"none" }}>
@@ -1246,6 +1396,82 @@ export default function App() {
             </div>
           );
         })()}
+
+        {/* LIFE — Objectifs + Habitudes */}
+        {view==="life" && (
+          <div>
+            <div style={{ marginBottom:20 }}>
+              <div style={{ fontSize:10, letterSpacing:4, color:"#68d391", textTransform:"uppercase", marginBottom:5 }}>Long terme</div>
+              <div style={{ fontSize:26, color:"#e8e0d4", fontWeight:"bold" }}>Life</div>
+              <div style={{ fontSize:12, color:"#5a6a7a", marginTop:5 }}>Objectifs majeurs et habitudes — la base de l'Effet Cumulé</div>
+            </div>
+
+            {/* Objectifs */}
+            <div style={{ background:"#0f1520", borderRadius:10, border:"1px solid #1a2535", padding:"16px 18px", marginBottom:16 }}>
+              <div style={{ fontSize:10, letterSpacing:3, color:"#f0b429", textTransform:"uppercase", marginBottom:12 }}>🎯 Mes objectifs (max 3)</div>
+              {goals.map(g => {
+                const { done, total } = goalProgress(g.id);
+                const pct = total > 0 ? Math.round((done/total)*100) : 0;
+                return (
+                  <div key={g.id} style={{ marginBottom:12 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
+                      {editingGoalId === g.id ? (
+                        <input value={g.title} onChange={e => patchGoal(g.id, { title: e.target.value })} onBlur={() => setEditingGoalId(null)}
+                          onKeyDown={e => e.key==="Enter" && setEditingGoalId(null)} autoFocus
+                          style={{ flex:1, background:"#0a0c10", border:"1px solid #2a3a4a", borderRadius:5, padding:"4px 8px", color:"#e8e0d4", fontSize:13, outline:"none" }} />
+                      ) : (
+                        <div onClick={() => setEditingGoalId(g.id)} style={{ fontSize:13, color:g.color, fontWeight:"bold", cursor:"pointer" }}>{g.title}</div>
+                      )}
+                      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                        <span style={{ fontSize:11, color:"#5a6a7a", fontFamily:"monospace" }}>{done}/{total} actions</span>
+                        <span onClick={() => deleteGoal(g.id)} style={{ fontSize:11, color:"#3a4a5a", cursor:"pointer" }}>✕</span>
+                      </div>
+                    </div>
+                    <div style={{ height:6, background:"#0a0f18", borderRadius:3, overflow:"hidden" }}>
+                      <div style={{ height:"100%", width:`${pct}%`, background:g.color, transition:"width 0.4s" }} />
+                    </div>
+                  </div>
+                );
+              })}
+              {goals.length < 3 && (
+                <div style={{ display:"flex", gap:6, marginTop:10 }}>
+                  <input value={newGoalTitle} onChange={e => setNewGoalTitle(e.target.value)} onKeyDown={e => e.key==="Enter" && addGoal()}
+                    placeholder="Nouvel objectif majeur (max 3)..."
+                    style={{ flex:1, background:"#0a0c10", border:"1px solid #1a2535", borderRadius:5, padding:"7px 10px", color:"#e8e0d4", fontSize:12, outline:"none" }} />
+                  <button onClick={addGoal} style={{ background:"#f0b429", border:"none", borderRadius:5, padding:"7px 14px", color:"#0a0c10", fontSize:12, fontWeight:"bold", cursor:"pointer" }}>+ Ajouter</button>
+                </div>
+              )}
+              <div style={{ fontSize:10, color:"#3a4a5a", marginTop:10, fontStyle:"italic" }}>💡 Lie une tâche à un objectif depuis le Planificateur, en cliquant sur la tâche.</div>
+            </div>
+
+            {/* Habitudes */}
+            <div style={{ background:"#0f1520", borderRadius:10, border:"1px solid #1a2535", padding:"16px 18px" }}>
+              <div style={{ fontSize:10, letterSpacing:3, color:"#8ab4f8", textTransform:"uppercase", marginBottom:12 }}>🔁 Mes habitudes</div>
+              {habits.map(h => {
+                const todayKey = getTodayKey();
+                const done = (habitCompletions[h.id] || []).includes(todayKey);
+                const streak = habitStreak(h.id);
+                return (
+                  <div key={h.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:"1px solid #141e2a" }}>
+                    <div onClick={() => toggleHabitToday(h)} style={{ cursor:"pointer" }}>
+                      <CheckBox checked={done} color={h.color} />
+                    </div>
+                    <div style={{ flex:1, fontSize:13, color:"#c8c0b4" }}>{h.title}</div>
+                    <div style={{ fontSize:11, color: streak>0 ? "#f0b429" : "#3a4a5a", fontFamily:"monospace" }}>{streak>0 ? `🔥 ${streak}j` : "0j"}</div>
+                    <span onClick={() => deleteHabit(h.id)} style={{ fontSize:11, color:"#3a4a5a", cursor:"pointer" }}>✕</span>
+                  </div>
+                );
+              })}
+              {habits.length === 0 && <div style={{ fontSize:11, color:"#3a4a5a", fontStyle:"italic" }}>Aucune habitude pour l'instant.</div>}
+              <div style={{ display:"flex", gap:6, marginTop:12 }}>
+                <input value={newHabitTitle} onChange={e => setNewHabitTitle(e.target.value)} onKeyDown={e => e.key==="Enter" && addHabit()}
+                  placeholder="Nouvelle habitude (ex: Lire 20 min)..."
+                  style={{ flex:1, background:"#0a0c10", border:"1px solid #1a2535", borderRadius:5, padding:"7px 10px", color:"#e8e0d4", fontSize:12, outline:"none" }} />
+                <button onClick={addHabit} style={{ background:"#8ab4f8", border:"none", borderRadius:5, padding:"7px 14px", color:"#0a0c10", fontSize:12, fontWeight:"bold", cursor:"pointer" }}>+ Ajouter</button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* BILAN */}
         {view==="bilan" && (() => {
@@ -1438,6 +1664,62 @@ export default function App() {
                 </div>
               </>
             )}
+          </div>
+        )}
+
+        {/* PARAMÈTRES */}
+        {view==="settings" && (
+          <div>
+            <div style={{ marginBottom:20 }}>
+              <div style={{ fontSize:10, letterSpacing:4, color:"#5a6a7a", textTransform:"uppercase", marginBottom:5 }}>Configuration</div>
+              <div style={{ fontSize:26, color:"#e8e0d4", fontWeight:"bold" }}>Paramètres</div>
+            </div>
+
+            <div style={{ background:"#0f1520", borderRadius:10, border:"1px solid #1a2535", padding:"16px 18px", marginBottom:16 }}>
+              <div style={{ fontSize:10, letterSpacing:3, color:"#8ab4f8", textTransform:"uppercase", marginBottom:12 }}>🪄 Auto-planification</div>
+
+              <div style={{ fontSize:12, color:"#c8c0b4", marginBottom:6 }}>Plage horaire de travail</div>
+              <div style={{ display:"flex", gap:8, marginBottom:14 }}>
+                <input type="time" value={settings.workday_start} onChange={e => patchSettings({ workday_start: e.target.value })}
+                  style={{ flex:1, background:"#0a0c10", border:"1px solid #1a2535", borderRadius:6, padding:"7px 10px", color:"#e8e0d4", fontSize:12, outline:"none" }} />
+                <span style={{ color:"#5a6a7a", alignSelf:"center" }}>→</span>
+                <input type="time" value={settings.workday_end} onChange={e => patchSettings({ workday_end: e.target.value })}
+                  style={{ flex:1, background:"#0a0c10", border:"1px solid #1a2535", borderRadius:6, padding:"7px 10px", color:"#e8e0d4", fontSize:12, outline:"none" }} />
+              </div>
+
+              <div style={{ fontSize:12, color:"#c8c0b4", marginBottom:6 }}>Buffer time entre deux tâches (minutes)</div>
+              <div style={{ display:"flex", gap:6, marginBottom:14 }}>
+                {[0,5,10,15,20,30].map(m => (
+                  <div key={m} onClick={() => patchSettings({ buffer_minutes: m })}
+                    style={{ flex:1, textAlign:"center", padding:"6px 0", borderRadius:6, cursor:"pointer", fontSize:11,
+                      background: settings.buffer_minutes===m ? "#8ab4f822" : "#0a0f18",
+                      border:`1px solid ${settings.buffer_minutes===m?"#8ab4f8":"#1a2535"}`,
+                      color: settings.buffer_minutes===m?"#8ab4f8":"#5a6a7a" }}>{m}m</div>
+                ))}
+              </div>
+
+              <div onClick={() => patchSettings({ auto_reschedule: !settings.auto_reschedule })} style={{ display:"flex", alignItems:"center", gap:10, cursor:"pointer" }}>
+                <CheckBox checked={!!settings.auto_reschedule} color="#68d391" />
+                <div style={{ fontSize:12, color:"#c8c0b4" }}>Replanifier automatiquement les tâches en retard vers le prochain créneau libre</div>
+              </div>
+            </div>
+
+            <div style={{ background:"#0f1520", borderRadius:10, border:"1px solid #1a2535", padding:"16px 18px", marginBottom:16 }}>
+              <div style={{ fontSize:10, letterSpacing:3, color:"#c084fc", textTransform:"uppercase", marginBottom:12 }}>📅 Google Calendar</div>
+              {googleToken ? (
+                <button onClick={disconnectGoogle} style={{ background:"#0d1a12", border:"1px solid #2a4a20", borderRadius:6, color:"#68d391", padding:"8px 14px", cursor:"pointer", fontSize:12 }}>Déconnecter Google Calendar</button>
+              ) : (
+                <button onClick={connectGoogle} style={{ background:"#0f1520", border:"1px solid #1a2535", borderRadius:6, color:"#8ab4f8", padding:"8px 14px", cursor:"pointer", fontSize:12 }}>Connecter Google Calendar</button>
+              )}
+            </div>
+
+            <div style={{ background:"#0f1520", borderRadius:10, border:"1px solid #1a2535", padding:"16px 18px" }}>
+              <div style={{ fontSize:10, letterSpacing:3, color:"#5a6a7a", textTransform:"uppercase", marginBottom:12 }}>ℹ️ À propos</div>
+              <div style={{ fontSize:12, color:"#5a6a7a", lineHeight:1.8 }}>
+                Discipline System — dashboard personnel de discipline, organisation et effet cumulé.<br/>
+                Données synchronisées via Supabase · Déployé sur Vercel.
+              </div>
+            </div>
           </div>
         )}
       </div>
