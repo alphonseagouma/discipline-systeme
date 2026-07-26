@@ -126,6 +126,13 @@ const RECURRENCES = [
   { val: "mensuelle", label: "Mensuelle" },
 ];
 const LABEL_COLORS = ["#68d391","#8ab4f8","#f0b429","#fb8a4a","#c084fc","#f472b6","#4dd4d4","#e8e0d4"];
+const GOAL_CATEGORIES = [
+  { val:"personnel", label:"Personnel", icon:"🧘" },
+  { val:"finance", label:"Finance", icon:"💰" },
+  { val:"professionnel", label:"Professionnel", icon:"💼" },
+  { val:"business", label:"Business", icon:"🚀" },
+  { val:"maison", label:"Maison", icon:"🏠" },
+];
 const PLANNER_HOURS = Array.from({ length: 17 }, (_, i) => i + 6); // 06h -> 22h
 const GOOGLE_CLIENT_ID = "475742292156-jh4j1m135g5oeco89ko8rasmab5u78ug.apps.googleusercontent.com";
 const GOOGLE_SCOPE = "https://www.googleapis.com/auth/calendar";
@@ -213,6 +220,8 @@ export default function App() {
   const [habits, setHabits] = useState([]);
   const [habitCompletions, setHabitCompletions] = useState({}); // habit_id -> [date_key,...]
   const [newHabitTitle, setNewHabitTitle] = useState("");
+  const [editingHabitId, setEditingHabitId] = useState(null);
+  const [showArchivedHabits, setShowArchivedHabits] = useState(false);
   const [autoScheduling, setAutoScheduling] = useState(false);
   const rescheduledRef = useRef(false);
   const [now, setNow] = useState(new Date());
@@ -655,31 +664,40 @@ export default function App() {
   const addHabit = async () => {
     const title = newHabitTitle.trim();
     if (!title) return;
-    const row = await dbInsert("habits", { title, color: LABEL_COLORS[habits.length % LABEL_COLORS.length] });
+    const row = await dbInsert("habits", { title, color: LABEL_COLORS[habits.length % LABEL_COLORS.length], weekly_target: 7, archived: false });
     if (row) setHabits(prev => [...prev, row]);
     setNewHabitTitle("");
   };
+  const patchHabit = async (id, patch) => {
+    setHabits(prev => prev.map(h => h.id === id ? { ...h, ...patch } : h));
+    await dbPatch("habits", id, patch);
+  };
+  const archiveHabit = async (id) => patchHabit(id, { archived: true });
   const deleteHabit = async (id) => {
     setHabits(prev => prev.filter(h => h.id !== id));
     await dbDelete("habits", id);
   };
-  const toggleHabitToday = async (habit) => {
-    const todayKey = getTodayKey();
-    const done = (habitCompletions[habit.id] || []).includes(todayKey);
+  const toggleHabitDate = async (habit, dateKey) => {
+    const done = (habitCompletions[habit.id] || []).includes(dateKey);
     if (done) {
-      const res = await dbList("habit_completions", `&habit_id=eq.${habit.id}&date_key=eq.${todayKey}`);
+      const res = await dbList("habit_completions", `&habit_id=eq.${habit.id}&date_key=eq.${dateKey}`);
       if (res && res[0]) await dbDelete("habit_completions", res[0].id);
-      setHabitCompletions(prev => ({ ...prev, [habit.id]: (prev[habit.id]||[]).filter(d => d !== todayKey) }));
+      setHabitCompletions(prev => ({ ...prev, [habit.id]: (prev[habit.id]||[]).filter(d => d !== dateKey) }));
     } else {
-      const row = await dbInsert("habit_completions", { habit_id: habit.id, date_key: todayKey });
-      if (row) setHabitCompletions(prev => ({ ...prev, [habit.id]: [...(prev[habit.id]||[]), todayKey] }));
+      const row = await dbInsert("habit_completions", { habit_id: habit.id, date_key: dateKey });
+      if (row) setHabitCompletions(prev => ({ ...prev, [habit.id]: [...(prev[habit.id]||[]), dateKey] }));
     }
   };
+  const toggleHabitToday = (habit) => toggleHabitDate(habit, getTodayKey());
   const habitStreak = (habitId) => {
     const dates = new Set(habitCompletions[habitId] || []);
     let streak = 0; const d = new Date();
     while (dates.has(toDateKey(d))) { streak++; d.setDate(d.getDate()-1); }
     return streak;
+  };
+  const habitWeekCount = (habitId, weekDaysArr) => {
+    const dates = new Set(habitCompletions[habitId] || []);
+    return weekDaysArr.filter(d => dates.has(toDateKey(d))).length;
   };
   // --- fin Habitudes ---
 
@@ -793,7 +811,7 @@ export default function App() {
   const addGoal = async () => {
     const title = newGoalTitle.trim();
     if (!title || goals.length >= 3) return;
-    const row = await dbInsert("goals", { title, color: LABEL_COLORS[goals.length % LABEL_COLORS.length] });
+    const row = await dbInsert("goals", { title, color: LABEL_COLORS[goals.length % LABEL_COLORS.length], category: "personnel" });
     if (row) setGoals(prev => [...prev, row]);
     setNewGoalTitle("");
   };
@@ -960,45 +978,6 @@ export default function App() {
                     </div>
                   );
                 })}
-              </div>
-
-              {/* Objectifs — Effet Cumulé */}
-              <div style={{ background:"#0f1520", borderRadius:10, border:"1px solid #1a2535", padding:"16px 18px", marginBottom:16 }}>
-                <div style={{ fontSize:10, letterSpacing:3, color:"#f0b429", textTransform:"uppercase", marginBottom:12 }}>🎯 Mes objectifs (Effet Cumulé)</div>
-                {goals.map(g => {
-                  const { done, total } = goalProgress(g.id);
-                  const pct = total > 0 ? Math.round((done/total)*100) : 0;
-                  return (
-                    <div key={g.id} style={{ marginBottom:12 }}>
-                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
-                        {editingGoalId === g.id ? (
-                          <input value={g.title} onChange={e => patchGoal(g.id, { title: e.target.value })} onBlur={() => setEditingGoalId(null)}
-                            onKeyDown={e => e.key==="Enter" && setEditingGoalId(null)} autoFocus
-                            style={{ flex:1, background:"#0a0c10", border:"1px solid #2a3a4a", borderRadius:5, padding:"4px 8px", color:"#e8e0d4", fontSize:13, outline:"none" }} />
-                        ) : (
-                          <div onClick={() => setEditingGoalId(g.id)} style={{ fontSize:13, color:g.color, fontWeight:"bold", cursor:"pointer" }}>{g.title}</div>
-                        )}
-                        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                          <span style={{ fontSize:11, color:"#5a6a7a", fontFamily:"monospace" }}>{done}/{total} actions</span>
-                          <span onClick={() => deleteGoal(g.id)} style={{ fontSize:11, color:"#3a4a5a", cursor:"pointer" }}>✕</span>
-                        </div>
-                      </div>
-                      <div style={{ height:6, background:"#0a0f18", borderRadius:3, overflow:"hidden" }}>
-                        <div style={{ height:"100%", width:`${pct}%`, background:g.color, transition:"width 0.4s" }} />
-                      </div>
-                    </div>
-                  );
-                })}
-                {goals.length < 3 && (
-                  <div style={{ display:"flex", gap:6, marginTop:10 }}>
-                    <input value={newGoalTitle} onChange={e => setNewGoalTitle(e.target.value)} onKeyDown={e => e.key==="Enter" && addGoal()}
-                      placeholder="Nouvel objectif majeur (max 3)..."
-                      style={{ flex:1, background:"#0a0c10", border:"1px solid #1a2535", borderRadius:5, padding:"7px 10px", color:"#e8e0d4", fontSize:12, outline:"none" }} />
-                    <button onClick={addGoal} style={{ background:"#f0b429", border:"none", borderRadius:5, padding:"7px 14px", color:"#0a0c10", fontSize:12, fontWeight:"bold", cursor:"pointer" }}>+ Ajouter</button>
-                  </div>
-                )}
-                {goals.length === 0 && <div style={{ fontSize:11, color:"#3a4a5a", fontStyle:"italic" }}>Ajoute 1 à 3 objectifs majeurs, puis relie tes tâches du Planificateur à un objectif pour suivre ta progression jour après jour.</div>}
-                <div style={{ fontSize:10, color:"#3a4a5a", marginTop:10, fontStyle:"italic" }}>💡 Lie une tâche à un objectif depuis l'onglet Planificateur, en cliquant sur la tâche.</div>
               </div>
 
               {/* Tâches du jour (max 6, gérées depuis le Planificateur) */}
@@ -1398,7 +1377,13 @@ export default function App() {
         })()}
 
         {/* LIFE — Objectifs + Habitudes */}
-        {view==="life" && (
+        {view==="life" && (() => {
+          const habitWeekDays = getWeekDays(getWeekStart());
+          const DAY_LETTERS = ["L","M","M","J","V","S","D"];
+          const activeHabits = habits.filter(h => !h.archived);
+          const archivedHabits = habits.filter(h => h.archived);
+
+          return (
           <div>
             <div style={{ marginBottom:20 }}>
               <div style={{ fontSize:10, letterSpacing:4, color:"#68d391", textTransform:"uppercase", marginBottom:5 }}>Long terme</div>
@@ -1412,9 +1397,10 @@ export default function App() {
               {goals.map(g => {
                 const { done, total } = goalProgress(g.id);
                 const pct = total > 0 ? Math.round((done/total)*100) : 0;
+                const cat = GOAL_CATEGORIES.find(c => c.val === g.category) || GOAL_CATEGORIES[0];
                 return (
-                  <div key={g.id} style={{ marginBottom:12 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
+                  <div key={g.id} style={{ marginBottom:14, paddingBottom:12, borderBottom:"1px solid #141e2a" }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
                       {editingGoalId === g.id ? (
                         <input value={g.title} onChange={e => patchGoal(g.id, { title: e.target.value })} onBlur={() => setEditingGoalId(null)}
                           onKeyDown={e => e.key==="Enter" && setEditingGoalId(null)} autoFocus
@@ -1426,6 +1412,15 @@ export default function App() {
                         <span style={{ fontSize:11, color:"#5a6a7a", fontFamily:"monospace" }}>{done}/{total} actions</span>
                         <span onClick={() => deleteGoal(g.id)} style={{ fontSize:11, color:"#3a4a5a", cursor:"pointer" }}>✕</span>
                       </div>
+                    </div>
+                    <div style={{ display:"flex", gap:5, marginBottom:8, flexWrap:"wrap" }}>
+                      {GOAL_CATEGORIES.map(c => (
+                        <div key={c.val} onClick={() => patchGoal(g.id, { category: c.val })}
+                          style={{ padding:"3px 9px", borderRadius:5, cursor:"pointer", fontSize:10,
+                            background: g.category===c.val ? g.color+"22" : "#0a0f18",
+                            border:`1px solid ${g.category===c.val?g.color:"#1a2535"}`,
+                            color: g.category===c.val?g.color:"#5a6a7a" }}>{c.icon} {c.label}</div>
+                      ))}
                     </div>
                     <div style={{ height:6, background:"#0a0f18", borderRadius:3, overflow:"hidden" }}>
                       <div style={{ height:"100%", width:`${pct}%`, background:g.color, transition:"width 0.4s" }} />
@@ -1444,34 +1439,112 @@ export default function App() {
               <div style={{ fontSize:10, color:"#3a4a5a", marginTop:10, fontStyle:"italic" }}>💡 Lie une tâche à un objectif depuis le Planificateur, en cliquant sur la tâche.</div>
             </div>
 
-            {/* Habitudes */}
+            {/* Habitudes — calendrier hebdomadaire */}
             <div style={{ background:"#0f1520", borderRadius:10, border:"1px solid #1a2535", padding:"16px 18px" }}>
-              <div style={{ fontSize:10, letterSpacing:3, color:"#8ab4f8", textTransform:"uppercase", marginBottom:12 }}>🔁 Mes habitudes</div>
-              {habits.map(h => {
-                const todayKey = getTodayKey();
-                const done = (habitCompletions[h.id] || []).includes(todayKey);
-                const streak = habitStreak(h.id);
-                return (
-                  <div key={h.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom:"1px solid #141e2a" }}>
-                    <div onClick={() => toggleHabitToday(h)} style={{ cursor:"pointer" }}>
-                      <CheckBox checked={done} color={h.color} />
+              <div style={{ fontSize:10, letterSpacing:3, color:"#8ab4f8", textTransform:"uppercase", marginBottom:14 }}>🔁 Mes habitudes — semaine en cours</div>
+
+              <div style={{ display:"grid", gridTemplateColumns:"180px 1fr", gap:10 }}>
+                {/* Colonne 1 : liste des habitudes */}
+                <div>
+                  {activeHabits.map(h => (
+                    <div key={h.id} style={{ marginBottom:10 }}>
+                      {editingHabitId === h.id ? (
+                        <div style={{ background:"#0a0f18", border:`1px solid ${h.color}`, borderRadius:7, padding:8 }}>
+                          <input value={h.title} onChange={e => patchHabit(h.id, { title: e.target.value })}
+                            style={{ width:"100%", boxSizing:"border-box", background:"#0a0c10", border:"1px solid #1a2535", borderRadius:5, padding:"5px 7px", color:"#e8e0d4", fontSize:12, outline:"none", marginBottom:6 }} />
+                          <div style={{ fontSize:9, color:"#5a6a7a", marginBottom:4 }}>Objectif/semaine</div>
+                          <div style={{ display:"flex", gap:3, marginBottom:6 }}>
+                            {[1,2,3,4,5,6,7].map(n => (
+                              <div key={n} onClick={() => patchHabit(h.id, { weekly_target: n })}
+                                style={{ flex:1, textAlign:"center", padding:"3px 0", borderRadius:4, cursor:"pointer", fontSize:9,
+                                  background: h.weekly_target===n ? h.color+"33" : "#0a0c10",
+                                  border:`1px solid ${h.weekly_target===n?h.color:"#1a2535"}`,
+                                  color: h.weekly_target===n?h.color:"#5a6a7a" }}>{n}</div>
+                            ))}
+                          </div>
+                          <div style={{ display:"flex", gap:5 }}>
+                            <button onClick={() => setEditingHabitId(null)} style={{ flex:1, background:"#68d391", border:"none", borderRadius:5, padding:"5px 0", color:"#0a0c10", fontSize:11, fontWeight:"bold", cursor:"pointer" }}>OK</button>
+                            <button onClick={() => archiveHabit(h.id)} style={{ background:"#0a0f18", border:"1px solid #1a2535", borderRadius:5, padding:"5px 8px", color:"#5a6a7a", fontSize:11, cursor:"pointer" }}>📦</button>
+                            <button onClick={() => deleteHabit(h.id)} style={{ background:"#2a1520", border:"1px solid #4a2030", borderRadius:5, padding:"5px 8px", color:"#fb8a4a", fontSize:11, cursor:"pointer" }}>🗑️</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div onClick={() => setEditingHabitId(h.id)} style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer", height:34 }}>
+                          <div style={{ width:8, height:8, borderRadius:"50%", background:h.color, flexShrink:0 }} />
+                          <div style={{ fontSize:12, color:"#c8c0b4", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{h.title}</div>
+                          <div style={{ fontSize:9, color:"#3a4a5a" }}>✏️</div>
+                        </div>
+                      )}
                     </div>
-                    <div style={{ flex:1, fontSize:13, color:"#c8c0b4" }}>{h.title}</div>
-                    <div style={{ fontSize:11, color: streak>0 ? "#f0b429" : "#3a4a5a", fontFamily:"monospace" }}>{streak>0 ? `🔥 ${streak}j` : "0j"}</div>
-                    <span onClick={() => deleteHabit(h.id)} style={{ fontSize:11, color:"#3a4a5a", cursor:"pointer" }}>✕</span>
+                  ))}
+                  <div style={{ display:"flex", gap:4, marginTop:6 }}>
+                    <input value={newHabitTitle} onChange={e => setNewHabitTitle(e.target.value)} onKeyDown={e => e.key==="Enter" && addHabit()}
+                      placeholder="+ Habitude..."
+                      style={{ flex:1, background:"#0a0c10", border:"1px solid #1a2535", borderRadius:5, padding:"6px 8px", color:"#e8e0d4", fontSize:11, outline:"none" }} />
+                    <button onClick={addHabit} style={{ background:"#8ab4f8", border:"none", borderRadius:5, padding:"6px 10px", color:"#0a0c10", fontSize:11, fontWeight:"bold", cursor:"pointer" }}>+</button>
                   </div>
-                );
-              })}
-              {habits.length === 0 && <div style={{ fontSize:11, color:"#3a4a5a", fontStyle:"italic" }}>Aucune habitude pour l'instant.</div>}
-              <div style={{ display:"flex", gap:6, marginTop:12 }}>
-                <input value={newHabitTitle} onChange={e => setNewHabitTitle(e.target.value)} onKeyDown={e => e.key==="Enter" && addHabit()}
-                  placeholder="Nouvelle habitude (ex: Lire 20 min)..."
-                  style={{ flex:1, background:"#0a0c10", border:"1px solid #1a2535", borderRadius:5, padding:"7px 10px", color:"#e8e0d4", fontSize:12, outline:"none" }} />
-                <button onClick={addHabit} style={{ background:"#8ab4f8", border:"none", borderRadius:5, padding:"7px 14px", color:"#0a0c10", fontSize:12, fontWeight:"bold", cursor:"pointer" }}>+ Ajouter</button>
+                  {activeHabits.length === 0 && <div style={{ fontSize:11, color:"#3a4a5a", fontStyle:"italic", marginBottom:8 }}>Aucune habitude suivie.</div>}
+                </div>
+
+                {/* Colonne 2 : calendrier hebdomadaire */}
+                <div>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr) 50px", gap:4, marginBottom:6 }}>
+                    {DAY_LETTERS.map((l,i) => (
+                      <div key={i} style={{ textAlign:"center", fontSize:10, color: toDateKey(habitWeekDays[i])===getTodayKey() ? "#68d391" : "#5a6a7a", fontFamily:"monospace" }}>{l}</div>
+                    ))}
+                    <div />
+                  </div>
+                  {activeHabits.map(h => {
+                    const weekCount = habitWeekCount(h.id, habitWeekDays);
+                    const target = h.weekly_target || 7;
+                    const pct = Math.min(100, Math.round((weekCount/target)*100));
+                    const circ = 2*Math.PI*16;
+                    return (
+                      <div key={h.id} style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr) 50px", gap:4, alignItems:"center", height:34, marginBottom:10 }}>
+                        {habitWeekDays.map(day => {
+                          const dk = toDateKey(day);
+                          const done = (habitCompletions[h.id] || []).includes(dk);
+                          const isFuture = dk > getTodayKey();
+                          return (
+                            <div key={dk} onClick={() => !isFuture && toggleHabitDate(h, dk)}
+                              style={{ width:24, height:24, margin:"0 auto", borderRadius:6, cursor: isFuture?"default":"pointer",
+                                background: done ? h.color : "#0a0f18", border:`1px solid ${done?h.color:"#1a2535"}`,
+                                opacity: isFuture?0.3:1,
+                                display:"flex", alignItems:"center", justifyContent:"center" }}>
+                              {done && <span style={{ fontSize:11, color:"#0a0c10" }}>✓</span>}
+                            </div>
+                          );
+                        })}
+                        <svg width="34" height="34" viewBox="0 0 34 34">
+                          <circle cx="17" cy="17" r="16" fill="none" stroke="#1a2535" strokeWidth="3"/>
+                          <circle cx="17" cy="17" r="16" fill="none" stroke={h.color} strokeWidth="3"
+                            strokeDasharray={`${(pct/100)*circ} ${circ}`} strokeLinecap="round" transform="rotate(-90 17 17)" />
+                          <text x="17" y="21" textAnchor="middle" fill={h.color} fontSize="9" fontFamily="monospace">{weekCount}/{target}</text>
+                        </svg>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
+
+              {archivedHabits.length > 0 && (
+                <div style={{ marginTop:14, paddingTop:10, borderTop:"1px solid #141e2a" }}>
+                  <div onClick={() => setShowArchivedHabits(s => !s)} style={{ fontSize:10, color:"#3a4a5a", cursor:"pointer" }}>
+                    {showArchivedHabits ? "▾" : "▸"} {archivedHabits.length} habitude(s) archivée(s)
+                  </div>
+                  {showArchivedHabits && archivedHabits.map(h => (
+                    <div key={h.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 0" }}>
+                      <div style={{ fontSize:12, color:"#5a6a7a", flex:1 }}>{h.title}</div>
+                      <span onClick={() => patchHabit(h.id, { archived:false })} style={{ fontSize:10, color:"#68d391", cursor:"pointer" }}>Réactiver</span>
+                      <span onClick={() => deleteHabit(h.id)} style={{ fontSize:10, color:"#fb8a4a", cursor:"pointer" }}>Supprimer</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* BILAN */}
         {view==="bilan" && (() => {
