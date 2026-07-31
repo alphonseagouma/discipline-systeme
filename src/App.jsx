@@ -216,6 +216,13 @@ const RECURRENCES = [
   { val: "mensuelle", label: "Mensuelle" },
 ];
 const LABEL_COLORS = ["#68d391","#8ab4f8","#f0b429","#fb8a4a","#c084fc","#f472b6","#4dd4d4","var(--text)"];
+const WINDOW_PRESETS = [
+  { label:"Toute la journée", icon:"🌐", start:null, end:null },
+  { label:"Matin", icon:"🌅", start:"06:00:00", end:"12:00:00" },
+  { label:"Après-midi", icon:"☀️", start:"12:00:00", end:"18:00:00" },
+  { label:"Soir", icon:"🌙", start:"18:00:00", end:"22:00:00" },
+  { label:"Personnalisé", icon:"⚙️", start:"09:00:00", end:"17:00:00" },
+];
 const GOAL_CATEGORIES = [
   { val:"personnel", label:"Personnel", icon:"🧘" },
   { val:"finance", label:"Finance", icon:"💰" },
@@ -372,7 +379,6 @@ export default function App() {
   const [editingHabitId, setEditingHabitId] = useState(null);
   const [showArchivedHabits, setShowArchivedHabits] = useState(false);
   const [autoScheduling, setAutoScheduling] = useState(false);
-  const rescheduledRef = useRef(false);
   const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
   const [syncQueueLen, setSyncQueueLen] = useState(0);
   useEffect(() => {
@@ -388,6 +394,16 @@ export default function App() {
   }, []);
   const notifiedTasksRef = useRef(new Set());
   const [now, setNow] = useState(new Date());
+
+  // Rééquilibrage automatique périodique : rattrape les conflits qui apparaissent avec le temps
+  // qui passe (créneau aujourd'hui désormais dépassé) même sans nouvelle donnée chargée.
+  useEffect(() => {
+    const interval = setInterval(() => { autoRebalance(); }, 3 * 60 * 1000); // toutes les 3 min
+    const onVisible = () => { if (document.visibilityState === "visible") autoRebalance(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(interval); document.removeEventListener("visibilitychange", onVisible); };
+  }, [plannerTasks, googleEvents, settings.auto_reschedule, settings.buffer_minutes]);
+
 
   // --- Redimensionnement des tâches par glisser (façon Google Agenda / Reclaim.ai) ---
   const resizeStateRef = useRef(null); // { id, startY, startDuration, current }
@@ -734,7 +750,7 @@ export default function App() {
   }, [view]);
 
   useEffect(() => {
-    if (plannerTasks.length > 0 && !rescheduledRef.current) runAutoReschedule();
+    if (plannerTasks.length > 0) autoRebalance();
   }, [plannerTasks.length]);
 
   const addInboxTask = async () => {
@@ -933,6 +949,7 @@ export default function App() {
       if (res.status === 401) { setGoogleToken(null); setGoogleEvents([]); return; }
       const data = await res.json();
       setGoogleEvents(data.items || []);
+      setTimeout(() => autoRebalance(), 300); // laisse le state se stabiliser avant de vérifier les conflits
     } catch { /* silencieux */ }
     setGoogleLoading(false);
   };
@@ -1075,10 +1092,15 @@ export default function App() {
     return true;
   };
 
-  const findNextFreeSlot = (fromDateKey, durationMin, excludeTaskId, tasksSource) => {
+  const findNextFreeSlot = (fromDateKey, durationMin, excludeTaskId, tasksSource, windowStart, windowEnd) => {
     const source = tasksSource || plannerTasks;
-    const startH = parseInt(settings.workday_start.slice(0,2),10);
-    const endH = parseInt(settings.workday_end.slice(0,2),10);
+    const workStartH = parseInt(settings.workday_start.slice(0,2),10);
+    const workEndH = parseInt(settings.workday_end.slice(0,2),10);
+    // Fenêtre horaire propre à la tâche (ex: "matin seulement") : on l'intersecte avec les horaires de travail.
+    const winStartH = windowStart ? parseInt(windowStart.slice(0,2),10) + parseInt(windowStart.slice(3,5),10)/60 : workStartH;
+    const winEndH = windowEnd ? parseInt(windowEnd.slice(0,2),10) + parseInt(windowEnd.slice(3,5),10)/60 : workEndH;
+    const startH = Math.max(workStartH, Math.floor(winStartH));
+    const endH = Math.min(workEndH, Math.ceil(winEndH));
     const todayKey = getTodayKey();
     const now = new Date();
     // Heure actuelle arrondie au prochain multiple de 5 minutes, pour ne jamais proposer un créneau déjà passé.
@@ -1092,7 +1114,9 @@ export default function App() {
       const isToday = dateKey === todayKey;
       for (let h = startH; h < endH; h++) {
         if (isToday && h + 1 <= nowH) continue; // ce créneau horaire est entièrement dans le passé
-        const slotStart = (isToday && h === Math.floor(nowH)) ? nowH : h;
+        let slotStart = (isToday && h === Math.floor(nowH)) ? nowH : h;
+        slotStart = Math.max(slotStart, winStartH); // respecte le début exact de la fenêtre (ex: 06:30)
+        if (slotStart + durationMin/60 > winEndH) continue; // dépasserait la fin de la fenêtre
         if (isSlotFree(dateKey, slotStart, durationMin, dayTasksList, dayEvents)) {
           const hh = Math.floor(slotStart), mm = Math.round((slotStart - hh) * 60);
           return { dateKey, time: `${pad2(hh)}:${pad2(mm)}` };
@@ -1123,7 +1147,7 @@ export default function App() {
     for (const id of order) {
       const task = working.find(t => t.id === id);
       if (!task) continue;
-      const slot = findNextFreeSlot(todayKey, task.duration_minutes || 30, task.id, working);
+      const slot = findNextFreeSlot(todayKey, task.duration_minutes || 30, task.id, working, task.window_start, task.window_end);
       if (slot) {
         working = working.map(t => t.id === id ? { ...t, scheduled_date: slot.dateKey, scheduled_time: slot.time } : t);
         await patchPlannerTask(id, { scheduled_date: slot.dateKey, scheduled_time: slot.time });
@@ -1133,17 +1157,64 @@ export default function App() {
   };
 
 
-  const runAutoReschedule = async () => {
-    if (rescheduledRef.current || !settings.auto_reschedule) return;
-    rescheduledRef.current = true;
+  // Vérifie si une tâche planifiée est désormais en conflit (retard, routine, autre tâche, événement Google)
+  const taskHasConflict = (task, source) => {
+    if (!task.scheduled_date || !task.scheduled_time) return false;
     const todayKey = getTodayKey();
+    if (task.scheduled_date < todayKey) return true; // jour déjà passé
+    const [hh, mm] = task.scheduled_time.split(":").map(Number);
+    const start = hh + mm / 60;
+    const dur = (task.duration_minutes || 30) / 60;
+    const end = start + dur;
+    if (task.scheduled_date === todayKey) {
+      const now = new Date();
+      const nowH = now.getHours() + now.getMinutes() / 60;
+      if (end <= nowH) return true; // créneau déjà entièrement passé aujourd'hui
+    }
+    for (let h = Math.floor(start); h < Math.ceil(end); h++) if (blockedHours.has(h)) return true; // routine
+    if (task.window_start) {
+      const winStart = parseInt(task.window_start.slice(0,2),10) + parseInt(task.window_start.slice(3,5),10)/60;
+      if (start < winStart) return true; // avant sa fenêtre horaire
+    }
+    if (task.window_end) {
+      const winEnd = parseInt(task.window_end.slice(0,2),10) + parseInt(task.window_end.slice(3,5),10)/60;
+      if (end > winEnd) return true; // après sa fenêtre horaire
+    }
+    const bufferH = settings.buffer_minutes / 60;
+    const others = source.filter(t => t.id !== task.id && t.scheduled_date === task.scheduled_date && t.scheduled_time && !t.completed);
+    for (const o of others) {
+      const [ohh, omm] = o.scheduled_time.split(":").map(Number);
+      const oStart = ohh + omm / 60, oEnd = oStart + (o.duration_minutes || 30) / 60;
+      if (start < oEnd + bufferH && end + bufferH > oStart) return true;
+    }
+    const dayEvents = googleEvents.filter(ev => { const s = ev.start?.dateTime || ev.start?.date; return s && s.slice(0,10) === task.scheduled_date; });
+    for (const ev of dayEvents) {
+      const s = ev.start?.dateTime; if (!s) continue;
+      const evStart = new Date(s), evEnd = new Date(ev.end?.dateTime || s);
+      const evH = evStart.getHours() + evStart.getMinutes()/60, evEndH = evEnd.getHours() + evEnd.getMinutes()/60;
+      if (start < evEndH + bufferH && end + bufferH > evH) return true;
+    }
+    return false;
+  };
+
+  // Replanification automatique en continu : déplace en silence les tâches flexibles (non verrouillées)
+  // qui prennent du retard ou entrent en conflit avec un événement/une routine/une autre tâche.
+  const autoRebalance = async () => {
+    if (!settings.auto_reschedule) return;
+    let working = [...plannerTasks];
     const priorityRank = { haute: 0, moyenne: 1, basse: 2 };
-    const late = plannerTasks
-      .filter(t => t.scheduled_date && t.scheduled_date < todayKey && !t.completed && !t.locked)
+    const candidates = working
+      .filter(t => t.scheduled_date && !t.completed && !t.locked && taskHasConflict(t, working))
       .sort((a, b) => (priorityRank[a.priority] ?? 1) - (priorityRank[b.priority] ?? 1));
-    for (const task of late) {
-      const slot = findNextFreeSlot(todayKey, task.duration_minutes || 30, task.id);
-      if (slot) await patchPlannerTask(task.id, { scheduled_date: slot.dateKey, scheduled_time: slot.time });
+    if (candidates.length === 0) return;
+    const todayKey = getTodayKey();
+    for (const task of candidates) {
+      const searchFrom = task.scheduled_date < todayKey ? todayKey : task.scheduled_date;
+      const slot = findNextFreeSlot(searchFrom, task.duration_minutes || 30, task.id, working, task.window_start, task.window_end);
+      if (slot) {
+        working = working.map(t => t.id === task.id ? { ...t, scheduled_date: slot.dateKey, scheduled_time: slot.time } : t);
+        await patchPlannerTask(task.id, { scheduled_date: slot.dateKey, scheduled_time: slot.time });
+      }
     }
   };
 
@@ -1608,6 +1679,7 @@ export default function App() {
                   {task.scheduled_time && <span style={{ fontSize:9, color:"#8ab4f8", fontFamily:"monospace" }}>{task.scheduled_time.slice(0,5)}</span>}
                   {lbl && <span style={{ fontSize:9, color:lbl.color, background:lbl.color+"22", borderRadius:4, padding:"1px 6px" }}>{lbl.name}</span>}
                   {task.recurrence!=="aucune" && <span style={{ fontSize:9, color:"var(--muted)" }}>🔁 {RECURRENCES.find(r=>r.val===task.recurrence)?.label}</span>}
+                  {task.window_start && <span style={{ fontSize:9, color:"#8ab4f8" }} title={`Fenêtre : ${task.window_start.slice(0,5)}–${task.window_end?.slice(0,5)}`}>🕘 {task.window_start.slice(0,5)}–{task.window_end?.slice(0,5)}</span>}
                   <span onClick={(e) => { e.stopPropagation(); patchPlannerTask(task.id, { locked: !task.locked }); }}
                     title={task.locked ? "Verrouillée — clique pour rendre flexible" : "Flexible — clique pour verrouiller"}
                     style={{ fontSize:9, color: task.locked?"#fb8a4a":"var(--muted2)", cursor:"pointer" }}>{task.locked ? "🔒" : "🔓"}</span>
@@ -1829,6 +1901,30 @@ export default function App() {
                         <div style={{ fontSize:9, color:"var(--muted)", marginTop:2 }}>Clique pour {editingTask.locked ? "déverrouiller" : "verrouiller"}</div>
                       </div>
                     </div>
+
+                    <div style={{ fontSize:10, color:"var(--muted)", marginBottom:5 }}>Fenêtre horaire — l'autoplanification ne place cette tâche que dans ce créneau</div>
+                    <div style={{ display:"flex", gap:6, marginBottom:8, flexWrap:"wrap" }}>
+                      {WINDOW_PRESETS.map(w => {
+                        const active = editingTask.window_start === w.start && editingTask.window_end === w.end;
+                        return (
+                          <div key={w.label} onClick={() => patchPlannerTask(editingTask.id, { window_start: w.start, window_end: w.end })}
+                            style={{ padding:"5px 10px", borderRadius:5, cursor:"pointer", fontSize:11,
+                              background: active ? "#8ab4f822" : "var(--bg3)",
+                              border:`1px solid ${active?"#8ab4f8":"var(--border)"}`, color: active?"#8ab4f8":"var(--muted)" }}>{w.icon} {w.label}</div>
+                        );
+                      })}
+                    </div>
+                    {editingTask.window_start && (
+                      <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:10 }}>
+                        <input type="time" value={editingTask.window_start.slice(0,5)} onChange={e => patchPlannerTask(editingTask.id, { window_start: e.target.value+":00" })}
+                          style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:5, color:"var(--text2)", padding:"5px 8px", fontSize:11 }} />
+                        <span style={{ fontSize:11, color:"var(--muted)" }}>→</span>
+                        <input type="time" value={editingTask.window_end.slice(0,5)} onChange={e => patchPlannerTask(editingTask.id, { window_end: e.target.value+":00" })}
+                          style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:5, color:"var(--text2)", padding:"5px 8px", fontSize:11 }} />
+                        <span onClick={() => patchPlannerTask(editingTask.id, { window_start: null, window_end: null })}
+                          style={{ fontSize:11, color:"var(--muted2)", cursor:"pointer", marginLeft:"auto" }}>✕ Retirer</span>
+                      </div>
+                    )}
 
                     <div style={{ fontSize:10, color:"var(--muted)", marginBottom:5 }}>Étiquette</div>
                     <div style={{ display:"flex", gap:6, marginBottom:10, flexWrap:"wrap" }}>
@@ -2380,7 +2476,9 @@ export default function App() {
 
               <div onClick={() => patchSettings({ auto_reschedule: !settings.auto_reschedule })} style={{ display:"flex", alignItems:"center", gap:10, cursor:"pointer" }}>
                 <CheckBox checked={!!settings.auto_reschedule} color="#68d391" />
-                <div style={{ fontSize:12, color:"var(--text2)" }}>Replanifier automatiquement les tâches en retard vers le prochain créneau libre</div>
+                <div style={{ fontSize:12, color:"var(--text2)" }}>
+                  Replanification automatique en continu — dès qu'une tâche flexible (🔓) prend du retard ou entre en conflit avec un événement Google Calendar, elle est déplacée toute seule vers le prochain créneau libre. Les tâches verrouillées (🔒) ne sont jamais touchées.
+                </div>
               </div>
             </div>
 
