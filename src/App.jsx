@@ -388,6 +388,52 @@ export default function App() {
   }, []);
   const notifiedTasksRef = useRef(new Set());
   const [now, setNow] = useState(new Date());
+
+  // --- Redimensionnement des tâches par glisser (façon Google Agenda / Reclaim.ai) ---
+  const resizeStateRef = useRef(null); // { id, startY, startDuration, current }
+  const [resizingTaskId, setResizingTaskId] = useState(null);
+  useEffect(() => {
+    const onMove = (e) => {
+      const st = resizeStateRef.current;
+      if (!st) return;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      const deltaY = clientY - st.startY;
+      const deltaMin = Math.round(((deltaY / HOUR_PX) * 60) / 15) * 15;
+      const next = Math.max(15, st.startDuration + deltaMin);
+      if (next !== st.current) {
+        st.current = next;
+        setPlannerTasks(prev => prev.map(t => t.id === st.id ? { ...t, duration_minutes: next } : t));
+      }
+    };
+    const onUp = () => {
+      const st = resizeStateRef.current;
+      if (st) {
+        patchPlannerTask(st.id, { duration_minutes: st.current });
+        resizeStateRef.current = null;
+        setResizingTaskId(null);
+        document.body.style.cursor = "";
+      }
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchmove", onMove, { passive:false });
+    window.addEventListener("touchend", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onUp);
+    };
+  }, []);
+  const startResizeTask = (task, e) => {
+    e.stopPropagation(); e.preventDefault();
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    resizeStateRef.current = { id: task.id, startY: clientY, startDuration: task.duration_minutes || 30, current: task.duration_minutes || 30 };
+    setResizingTaskId(task.id);
+    document.body.style.cursor = "ns-resize";
+  };
+  // --- fin redimensionnement ---
+
   const [syncing, setSyncing] = useState(false);
   const [syncOk, setSyncOk] = useState(null);
   const [analyseData, setAnalyseData] = useState(null);
@@ -1029,7 +1075,8 @@ export default function App() {
     return true;
   };
 
-  const findNextFreeSlot = (fromDateKey, durationMin, excludeTaskId) => {
+  const findNextFreeSlot = (fromDateKey, durationMin, excludeTaskId, tasksSource) => {
+    const source = tasksSource || plannerTasks;
     const startH = parseInt(settings.workday_start.slice(0,2),10);
     const endH = parseInt(settings.workday_end.slice(0,2),10);
     const todayKey = getTodayKey();
@@ -1039,7 +1086,7 @@ export default function App() {
     for (let dayOffset = 0; dayOffset < 21; dayOffset++) {
       const d = new Date(fromDateKey + "T00:00:00"); d.setDate(d.getDate() + dayOffset);
       const dateKey = toDateKey(d);
-      const dayTasksList = plannerTasks.filter(t => t.scheduled_date === dateKey && t.id !== excludeTaskId);
+      const dayTasksList = source.filter(t => t.scheduled_date === dateKey && t.id !== excludeTaskId);
       if (dayTasksList.length >= 6) continue;
       const dayEvents = googleEvents.filter(ev => { const s = ev.start?.dateTime || ev.start?.date; return s && s.slice(0,10) === dateKey; });
       const isToday = dateKey === todayKey;
@@ -1055,21 +1102,36 @@ export default function App() {
     return null;
   };
 
-  const autoScheduleInbox = async () => {
+  // Replanifie l'ensemble des tâches non terminées :
+  // 1) celles déjà présentes dans le calendrier (planificateur), triées par échéance (date/heure prévue) la plus proche d'abord
+  // 2) puis celles de l'inbox (sans date), triées par priorité (haute → moyenne → basse)
+  const autoScheduleAll = async () => {
     setAutoScheduling(true);
     const todayKey = getTodayKey();
-    // Priorité haute d'abord, puis moyenne, puis basse : les tâches importantes
-    // récupèrent les créneaux libres les plus tôt disponibles.
     const priorityRank = { haute: 0, moyenne: 1, basse: 2 };
-    const sortedInbox = [...inboxTasks].sort((a, b) =>
-      (priorityRank[a.priority] ?? 1) - (priorityRank[b.priority] ?? 1)
-    );
-    for (const task of sortedInbox) {
-      const slot = findNextFreeSlot(todayKey, task.duration_minutes || 30, task.id);
-      if (slot) await patchPlannerTask(task.id, { scheduled_date: slot.dateKey, scheduled_time: slot.time });
+
+    let working = [...plannerTasks];
+    const scheduledPending = working
+      .filter(t => t.scheduled_date && !t.completed && !t.locked)
+      .sort((a, b) => (a.scheduled_date + (a.scheduled_time || "")).localeCompare(b.scheduled_date + (b.scheduled_time || "")));
+    const inboxPending = working
+      .filter(t => !t.scheduled_date && !t.completed && !t.locked)
+      .sort((a, b) => (priorityRank[a.priority] ?? 1) - (priorityRank[b.priority] ?? 1));
+
+    const order = [...scheduledPending, ...inboxPending].map(t => t.id);
+
+    for (const id of order) {
+      const task = working.find(t => t.id === id);
+      if (!task) continue;
+      const slot = findNextFreeSlot(todayKey, task.duration_minutes || 30, task.id, working);
+      if (slot) {
+        working = working.map(t => t.id === id ? { ...t, scheduled_date: slot.dateKey, scheduled_time: slot.time } : t);
+        await patchPlannerTask(id, { scheduled_date: slot.dateKey, scheduled_time: slot.time });
+      }
     }
     setAutoScheduling(false);
   };
+
 
   const runAutoReschedule = async () => {
     if (rescheduledRef.current || !settings.auto_reschedule) return;
@@ -1077,7 +1139,7 @@ export default function App() {
     const todayKey = getTodayKey();
     const priorityRank = { haute: 0, moyenne: 1, basse: 2 };
     const late = plannerTasks
-      .filter(t => t.scheduled_date && t.scheduled_date < todayKey && !t.completed)
+      .filter(t => t.scheduled_date && t.scheduled_date < todayKey && !t.completed && !t.locked)
       .sort((a, b) => (priorityRank[a.priority] ?? 1) - (priorityRank[b.priority] ?? 1));
     for (const task of late) {
       const slot = findNextFreeSlot(todayKey, task.duration_minutes || 30, task.id);
@@ -1487,23 +1549,34 @@ export default function App() {
             const lbl = labelById(task.label_id);
             const pr = PRIORITIES.find(p => p.val === task.priority) || PRIORITIES[1];
             if (compact) {
+              const isResizing = resizingTaskId === task.id;
               return (
                 <div
-                  draggable
+                  draggable={!isResizing}
                   onDragStart={() => setDragTaskId(task.id)}
-                  onClick={(e) => { e.stopPropagation(); setEditingTaskId(task.id); }}
+                  onClick={(e) => { e.stopPropagation(); if (!isResizing) setEditingTaskId(task.id); }}
                   style={{
+                    position:"relative",
                     background:"var(--bg1)", border:`1px solid ${lbl?lbl.color+"55":"var(--border)"}`, borderLeft:`3px solid ${pr.color}`,
-                    borderRadius:5, padding:"3px 6px", cursor:"grab", opacity: task.completed?0.45:1,
-                    height:"100%", overflow:"hidden", boxSizing:"border-box", boxShadow:"0 1px 3px #00000033",
+                    borderRadius:5, padding:"3px 6px", cursor: isResizing ? "ns-resize" : "grab", opacity: task.completed?0.45:1,
+                    height:"100%", overflow:"hidden", boxSizing:"border-box",
+                    boxShadow: isResizing ? `0 0 0 2px ${pr.color}` : "0 1px 3px #00000033",
                     ...style,
                   }}
                 >
                   <div style={{ fontSize:11, lineHeight:1.2, color: task.completed?"#3a5a3a":"var(--text2)", textDecoration:task.completed?"line-through":"none", fontWeight:500 }}>
-                    {task.title}
+                    {task.locked && <span title="Verrouillée — jamais déplacée automatiquement">🔒 </span>}{task.title}
                   </div>
                   <div style={{ fontSize:9, color:"var(--muted)", fontFamily:"monospace", marginTop:1 }}>
                     {task.scheduled_time?.slice(0,5)}{task.duration_minutes ? ` · ${task.duration_minutes}min` : ""}
+                  </div>
+                  {/* Poignée de redimensionnement — glisser pour changer la durée, comme sur Google Agenda / Reclaim */}
+                  <div
+                    onMouseDown={(e) => startResizeTask(task, e)}
+                    onTouchStart={(e) => startResizeTask(task, e)}
+                    style={{ position:"absolute", left:0, right:0, bottom:0, height:7, cursor:"ns-resize", display:"flex", alignItems:"flex-end", justifyContent:"center" }}
+                  >
+                    <div style={{ width:22, height:3, borderRadius:2, background: isResizing ? pr.color : "var(--muted2)", opacity: isResizing?1:0.6 }} />
                   </div>
                 </div>
               );
@@ -1527,7 +1600,7 @@ export default function App() {
                     <div style={{ width:10, height:10, borderRadius:"50%", border:`2px solid ${pr.color}55`, flexShrink:0 }} title="Planifie cette tâche sur une date pour pouvoir la cocher" />
                   )}
                   <div style={{ flex:1, fontSize:12, color: task.completed?"#3a5a3a":"var(--text2)", textDecoration:task.completed?"line-through":"none" }}>
-                    {task.title}
+                    {task.locked && <span title="Verrouillée — jamais déplacée automatiquement">🔒 </span>}{task.title}
                   </div>
                 </div>
                 <div style={{ display:"flex", gap:6, marginTop:5, flexWrap:"wrap" }}>
@@ -1535,6 +1608,9 @@ export default function App() {
                   {task.scheduled_time && <span style={{ fontSize:9, color:"#8ab4f8", fontFamily:"monospace" }}>{task.scheduled_time.slice(0,5)}</span>}
                   {lbl && <span style={{ fontSize:9, color:lbl.color, background:lbl.color+"22", borderRadius:4, padding:"1px 6px" }}>{lbl.name}</span>}
                   {task.recurrence!=="aucune" && <span style={{ fontSize:9, color:"var(--muted)" }}>🔁 {RECURRENCES.find(r=>r.val===task.recurrence)?.label}</span>}
+                  <span onClick={(e) => { e.stopPropagation(); patchPlannerTask(task.id, { locked: !task.locked }); }}
+                    title={task.locked ? "Verrouillée — clique pour rendre flexible" : "Flexible — clique pour verrouiller"}
+                    style={{ fontSize:9, color: task.locked?"#fb8a4a":"var(--muted2)", cursor:"pointer" }}>{task.locked ? "🔒" : "🔓"}</span>
                 </div>
               </div>
             );
@@ -1585,9 +1661,11 @@ export default function App() {
                   <span style={{ fontSize:13, color:"var(--text2)", fontFamily:"monospace", textTransform:"capitalize" }}>{rangeLabel}</span>
                   <button onClick={() => setPlannerStart(startOfDay())} style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"var(--muted)", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>Aujourd'hui</button>
                   <button onClick={() => setShowLabelManager(s => !s)} style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"#c084fc", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>🏷️ Étiquettes</button>
-                  {inboxTasks.length > 0 && (
-                    <button onClick={autoScheduleInbox} disabled={autoScheduling} style={{ background:"#68d39118", border:"1px solid #68d39155", borderRadius:6, color:"#68d391", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>
-                      {autoScheduling ? "⟳ Planification..." : "🪄 Auto-planifier l'inbox"}
+                  {(inboxTasks.length > 0 || plannerTasks.some(t => t.scheduled_date && !t.completed)) && (
+                    <button onClick={autoScheduleAll} disabled={autoScheduling}
+                      title="Replanifie toutes les tâches non terminées : d'abord celles déjà dans le calendrier (par échéance), puis l'inbox (par priorité)"
+                      style={{ background:"#68d39118", border:"1px solid #68d39155", borderRadius:6, color:"#68d391", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>
+                      {autoScheduling ? "⟳ Planification..." : "🪄 Autoplanifier"}
                     </button>
                   )}
                   <button onClick={() => duplicateDay(rangeCount===1 ? toDateKey(weekDays[0]) : toDateKey(startOfDay()))}
@@ -1737,6 +1815,19 @@ export default function App() {
                             background: editingTask.priority===p.val ? p.color+"33" : "var(--bg3)",
                             border:`1px solid ${editingTask.priority===p.val?p.color:"var(--border)"}`, color: p.color }}>{p.label}</div>
                       ))}
+                    </div>
+
+                    <div style={{ fontSize:10, color:"var(--muted)", marginBottom:5 }}>Flexibilité</div>
+                    <div onClick={() => patchPlannerTask(editingTask.id, { locked: !editingTask.locked })}
+                      style={{ display:"flex", alignItems:"center", gap:8, cursor:"pointer", padding:"8px 10px", borderRadius:6, marginBottom:10,
+                        background: editingTask.locked ? "#fb8a4a18" : "var(--bg3)", border:`1px solid ${editingTask.locked?"#fb8a4a55":"var(--border)"}` }}>
+                      <span style={{ fontSize:16 }}>{editingTask.locked ? "🔒" : "🔓"}</span>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontSize:12, color: editingTask.locked ? "#fb8a4a" : "var(--text2)" }}>
+                          {editingTask.locked ? "Verrouillée — jamais déplacée automatiquement" : "Flexible — peut être replanifiée automatiquement"}
+                        </div>
+                        <div style={{ fontSize:9, color:"var(--muted)", marginTop:2 }}>Clique pour {editingTask.locked ? "déverrouiller" : "verrouiller"}</div>
+                      </div>
                     </div>
 
                     <div style={{ fontSize:10, color:"var(--muted)", marginBottom:5 }}>Étiquette</div>
