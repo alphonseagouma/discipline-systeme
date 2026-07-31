@@ -395,15 +395,6 @@ export default function App() {
   const notifiedTasksRef = useRef(new Set());
   const [now, setNow] = useState(new Date());
 
-  // Rééquilibrage automatique périodique : rattrape les conflits qui apparaissent avec le temps
-  // qui passe (créneau aujourd'hui désormais dépassé) même sans nouvelle donnée chargée.
-  useEffect(() => {
-    const interval = setInterval(() => { autoRebalance(); }, 3 * 60 * 1000); // toutes les 3 min
-    const onVisible = () => { if (document.visibilityState === "visible") autoRebalance(); };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => { clearInterval(interval); document.removeEventListener("visibilitychange", onVisible); };
-  }, [plannerTasks, googleEvents, settings.auto_reschedule, settings.buffer_minutes]);
-
 
   // --- Redimensionnement des tâches par glisser (façon Google Agenda / Reclaim.ai) ---
   const resizeStateRef = useRef(null); // { id, startY, startDuration, current }
@@ -790,6 +781,18 @@ export default function App() {
     if (!task.scheduled_date) return; // les tâches de l'inbox ne sont pas cochables
     const completed = !task.completed;
     await patchPlannerTask(task.id, { completed });
+    // Tâche issue d'une habitude autoplanifiée : synchronise le suivi de l'habitude ce jour-là.
+    if (task.habit_id) {
+      const alreadyDone = (habitCompletions[task.habit_id] || []).includes(task.scheduled_date);
+      if (completed && !alreadyDone) {
+        const row = await dbInsert("habit_completions", { habit_id: task.habit_id, date_key: task.scheduled_date });
+        if (row) setHabitCompletions(prev => ({ ...prev, [task.habit_id]: [...(prev[task.habit_id]||[]), task.scheduled_date] }));
+      } else if (!completed && alreadyDone) {
+        const res = await dbList("habit_completions", `&habit_id=eq.${task.habit_id}&date_key=eq.${task.scheduled_date}`);
+        if (res && res[0]) await dbDelete("habit_completions", res[0].id);
+        setHabitCompletions(prev => ({ ...prev, [task.habit_id]: (prev[task.habit_id]||[]).filter(d => d !== task.scheduled_date) }));
+      }
+    }
     if (completed && task.recurrence && task.recurrence !== "aucune" && task.scheduled_date) {
       const nextDate = nextRecurrenceDate(task.scheduled_date, task.recurrence);
       if (nextDate) {
@@ -1036,6 +1039,52 @@ export default function App() {
     }
   };
   const toggleHabitToday = (habit) => toggleHabitDate(habit, getTodayKey());
+
+  // Autoplanification des habitudes : place des occurrences flexibles (heure libre, pas fixe)
+  // dans le calendrier jusqu'à atteindre l'objectif hebdomadaire (ex: "Sport 3x/semaine"),
+  // et retire les occurrences en trop si l'objectif est déjà atteint autrement.
+  const ensureHabitSchedule = async () => {
+    const todayKey = getTodayKey();
+    const weekDaysArr = getWeekDays(getWeekStart()).map(d => toDateKey(d));
+    const remainingDays = weekDaysArr.filter(d => d >= todayKey);
+
+    for (const h of habits.filter(x => !x.archived && x.auto_schedule)) {
+      const target = h.weekly_target || 3;
+      const doneThisWeek = weekDaysArr.filter(d => (habitCompletions[h.id]||[]).includes(d));
+      const scheduledThisWeek = plannerTasks.filter(t => t.habit_id === h.id && !t.completed && weekDaysArr.includes(t.scheduled_date));
+      const need = target - doneThisWeek.length - scheduledThisWeek.length;
+
+      if (need > 0) {
+        const busyDays = new Set([...doneThisWeek, ...scheduledThisWeek.map(t => t.scheduled_date)]);
+        const availableDays = remainingDays.filter(d => !busyDays.has(d));
+        let created = 0;
+        for (const dayKey of availableDays) {
+          if (created >= need) break;
+          const slot = findNextFreeSlot(dayKey, h.duration_minutes || 30, null, plannerTasks, h.window_start, h.window_end);
+          if (slot && slot.dateKey === dayKey) {
+            const row = await dbInsert("tasks", {
+              title: h.title, priority: "moyenne", recurrence: "aucune",
+              scheduled_date: slot.dateKey, scheduled_time: slot.time,
+              duration_minutes: h.duration_minutes || 30, habit_id: h.id,
+              window_start: h.window_start || null, window_end: h.window_end || null,
+              completed: false, locked: false,
+            });
+            if (row) { setPlannerTasks(prev => [...prev, row]); created++; }
+          }
+        }
+      } else if (need < 0 && scheduledThisWeek.length > 0) {
+        // Objectif déjà atteint (ex: cochée manuellement) : retire les occurrences en trop, en gardant les plus proches.
+        const excess = scheduledThisWeek
+          .sort((a,b) => (b.scheduled_date+b.scheduled_time).localeCompare(a.scheduled_date+a.scheduled_time))
+          .slice(0, -need);
+        for (const t of excess) {
+          setPlannerTasks(prev => prev.filter(pt => pt.id !== t.id));
+          await dbDelete("tasks", t.id);
+        }
+      }
+    }
+  };
+
   const habitStreak = (habitId) => {
     const dates = new Set(habitCompletions[habitId] || []);
     let streak = 0; const d = new Date();
@@ -1217,6 +1266,18 @@ export default function App() {
       }
     }
   };
+
+  // Rééquilibrage automatique périodique : rattrape les conflits qui apparaissent avec le temps
+  // qui passe (créneau aujourd'hui désormais dépassé) même sans nouvelle donnée chargée.
+  // Gère aussi l'autoplanification des habitudes (occurrences flexibles vers l'objectif hebdomadaire).
+  useEffect(() => {
+    autoRebalance();
+    ensureHabitSchedule();
+    const interval = setInterval(() => { autoRebalance(); ensureHabitSchedule(); }, 3 * 60 * 1000); // toutes les 3 min
+    const onVisible = () => { if (document.visibilityState === "visible") { autoRebalance(); ensureHabitSchedule(); } };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(interval); document.removeEventListener("visibilitychange", onVisible); };
+  }, [plannerTasks, googleEvents, settings.auto_reschedule, settings.buffer_minutes, habits, habitCompletions]);
 
   const startTimer = (task) => patchPlannerTask(task.id, { timer_started_at: new Date().toISOString() });
   const stopTimer = (task) => {
@@ -2033,6 +2094,39 @@ export default function App() {
                                   color: h.weekly_target===n?h.color:"var(--muted)" }}>{n}</div>
                             ))}
                           </div>
+
+                          <div onClick={() => patchHabit(h.id, { auto_schedule: !h.auto_schedule })}
+                            style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer", padding:"5px 7px", borderRadius:5, marginBottom:6,
+                              background: h.auto_schedule ? h.color+"18" : "var(--bg0)", border:`1px solid ${h.auto_schedule?h.color+"55":"var(--border)"}` }}>
+                            <CheckBox checked={!!h.auto_schedule} color={h.color} />
+                            <div style={{ fontSize:10, color: h.auto_schedule ? h.color : "var(--muted)" }}>🪄 Autoplanifier dans le calendrier</div>
+                          </div>
+                          {h.auto_schedule && (
+                            <>
+                              <div style={{ fontSize:9, color:"var(--muted)", marginBottom:3 }}>Durée par séance</div>
+                              <div style={{ display:"flex", gap:3, marginBottom:6, flexWrap:"wrap" }}>
+                                {[15,30,45,60,90].map(m => (
+                                  <div key={m} onClick={() => patchHabit(h.id, { duration_minutes: m })}
+                                    style={{ padding:"3px 6px", borderRadius:4, cursor:"pointer", fontSize:9,
+                                      background: (h.duration_minutes||30)===m ? h.color+"33" : "var(--bg0)",
+                                      border:`1px solid ${(h.duration_minutes||30)===m?h.color:"var(--border)"}`,
+                                      color: (h.duration_minutes||30)===m?h.color:"var(--muted)" }}>{m>=60?`${m/60}h`:`${m}m`}</div>
+                                ))}
+                              </div>
+                              <div style={{ fontSize:9, color:"var(--muted)", marginBottom:3 }}>Fenêtre — sinon placée librement dans la journée</div>
+                              <div style={{ display:"flex", gap:3, marginBottom:6, flexWrap:"wrap" }}>
+                                {WINDOW_PRESETS.filter(w => w.label!=="Personnalisé").map(w => {
+                                  const active = (h.window_start||null) === w.start && (h.window_end||null) === w.end;
+                                  return (
+                                    <div key={w.label} onClick={() => patchHabit(h.id, { window_start: w.start, window_end: w.end })}
+                                      style={{ padding:"3px 6px", borderRadius:4, cursor:"pointer", fontSize:9,
+                                        background: active ? h.color+"33" : "var(--bg0)",
+                                        border:`1px solid ${active?h.color:"var(--border)"}`, color: active?h.color:"var(--muted)" }}>{w.icon}</div>
+                                  );
+                                })}
+                              </div>
+                            </>
+                          )}
                           <div style={{ display:"flex", gap:5 }}>
                             <button onClick={() => setEditingHabitId(null)} style={{ flex:1, background:"#68d391", border:"none", borderRadius:5, padding:"5px 0", color:"var(--bg0)", fontSize:11, fontWeight:"bold", cursor:"pointer" }}>OK</button>
                             <button onClick={() => archiveHabit(h.id)} style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:5, padding:"5px 8px", color:"var(--muted)", fontSize:11, cursor:"pointer" }}>📦</button>
@@ -2043,6 +2137,7 @@ export default function App() {
                         <div onClick={() => setEditingHabitId(h.id)} style={{ display:"flex", alignItems:"center", gap:6, cursor:"pointer", height:34 }}>
                           <div style={{ width:8, height:8, borderRadius:"50%", background:h.color, flexShrink:0 }} />
                           <div style={{ fontSize:12, color:"var(--text2)", flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{h.title}</div>
+                          {h.auto_schedule && <span title="Autoplanifiée dans le calendrier" style={{ fontSize:10 }}>🪄</span>}
                           <div style={{ fontSize:9, color:"var(--muted2)" }}>✏️</div>
                         </div>
                       )}
