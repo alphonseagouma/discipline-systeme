@@ -19,80 +19,170 @@ const MIGRATION_DATA = {
   }
 };
 
+// --- Offline-first : cache local + file d'attente de synchronisation ---
+const CACHE_KEY = "tds_cache_v1";
+const QUEUE_KEY = "tds_pending_queue_v1";
+
+function lsRead(key, fallback) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
+}
+function lsWrite(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* quota / privé */ }
+}
+function uuid() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+    const r = Math.random()*16|0, v = c==="x"?r:(r&0x3|0x8); return v.toString(16);
+  });
+}
+function getCache() { return lsRead(CACHE_KEY, {}); }
+function setCacheTable(table, rows) {
+  const c = getCache(); c[table] = rows; lsWrite(CACHE_KEY, c);
+}
+function getCacheTable(table) { return getCache()[table] || []; }
+function getQueue() { return lsRead(QUEUE_KEY, []); }
+function setQueue(q) { lsWrite(QUEUE_KEY, q); syncListeners.forEach(fn => fn(q)); }
+function pushToQueue(op) { setQueue([...getQueue(), op]); }
+const syncListeners = new Set();
+function onSyncStateChange(fn) { syncListeners.add(fn); return () => syncListeners.delete(fn); }
+
+async function flushPendingQueue() {
+  let queue = getQueue();
+  if (queue.length === 0) return;
+  const remaining = [];
+  for (const op of queue) {
+    try {
+      let ok = false;
+      if (op.type === "insert") {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/${op.table}`, { method:"POST", headers:{...HEADERS,"Prefer":"return=minimal"}, body: JSON.stringify(op.row) });
+        ok = res.ok;
+      } else if (op.type === "patch") {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/${op.table}?id=eq.${op.id}`, { method:"PATCH", headers:{...HEADERS,"Prefer":"return=minimal"}, body: JSON.stringify(op.patch) });
+        ok = res.ok;
+      } else if (op.type === "delete") {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/${op.table}?id=eq.${op.id}`, { method:"DELETE", headers: HEADERS });
+        ok = res.ok;
+      } else if (op.type === "upsert") {
+        const existing = await fetch(`${SUPABASE_URL}/rest/v1/${op.table}?date_key=eq.${op.row.date_key}&select=date_key`, { headers: HEADERS }).then(r => r.ok ? r.json() : []).catch(() => []);
+        if (existing && existing.length > 0) {
+          const res = await fetch(`${SUPABASE_URL}/rest/v1/${op.table}?date_key=eq.${op.row.date_key}`, { method:"PATCH", headers:{...HEADERS,"Prefer":"return=minimal"}, body: JSON.stringify(op.row) });
+          ok = res.ok;
+        } else {
+          const res = await fetch(`${SUPABASE_URL}/rest/v1/${op.table}`, { method:"POST", headers:{...HEADERS,"Prefer":"return=minimal"}, body: JSON.stringify(op.row) });
+          ok = res.ok;
+        }
+      }
+      if (!ok) remaining.push(op); // on garde l'ordre, on retentera plus tard
+    } catch {
+      remaining.push(op);
+      break; // toujours hors ligne : on arrête ici pour respecter l'ordre
+    }
+  }
+  setQueue(remaining);
+}
+
 async function dbGet(table, dateKey) {
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?date_key=eq.${dateKey}&select=*`, { headers: HEADERS });
-    if (!res.ok) return null;
+    if (!res.ok) throw new Error("http");
     const data = await res.json();
-    return Array.isArray(data) && data.length > 0 ? data[0] : null;
-  } catch { return null; }
+    const row = Array.isArray(data) && data.length > 0 ? data[0] : null;
+    if (row) { const rows = getCacheTable(table).filter(r => r.date_key !== dateKey); setCacheTable(table, [...rows, row]); }
+    return row;
+  } catch {
+    return getCacheTable(table).find(r => r.date_key === dateKey) || null;
+  }
 }
 
 async function dbUpsert(table, row) {
+  // Mise à jour optimiste immédiate du cache local
+  const cached = getCacheTable(table).filter(r => r.date_key !== row.date_key);
+  setCacheTable(table, [...cached, row]);
   try {
     const existing = await dbGet(table, row.date_key);
     if (existing) {
-      await fetch(`${SUPABASE_URL}/rest/v1/${table}?date_key=eq.${row.date_key}`, {
-        method: "PATCH",
-        headers: { ...HEADERS, "Prefer": "return=minimal" },
-        body: JSON.stringify(row),
-      });
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?date_key=eq.${row.date_key}`, { method:"PATCH", headers:{...HEADERS,"Prefer":"return=minimal"}, body: JSON.stringify(row) });
+      if (!res.ok) throw new Error("http");
     } else {
-      await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
-        method: "POST",
-        headers: { ...HEADERS, "Prefer": "return=minimal" },
-        body: JSON.stringify(row),
-      });
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, { method:"POST", headers:{...HEADERS,"Prefer":"return=minimal"}, body: JSON.stringify(row) });
+      if (!res.ok) throw new Error("http");
     }
-  } catch { /* silencieux */ }
+  } catch {
+    pushToQueue({ type:"upsert", table, row });
+  }
 }
 
 // --- Helpers génériques (par id) pour le Planificateur ---
 async function dbList(table, query = "") {
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=*${query}`, { headers: HEADERS });
-    if (!res.ok) return [];
-    return await res.json();
-  } catch { return []; }
+    if (!res.ok) throw new Error("http");
+    const data = await res.json();
+    setCacheTable(table, data);
+    return data;
+  } catch {
+    return getCacheTable(table);
+  }
 }
 
 async function dbInsert(table, row) {
+  const rowWithId = row.id ? row : { ...row, id: uuid() };
+  setCacheTable(table, [...getCacheTable(table), rowWithId]);
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
       method: "POST",
       headers: { ...HEADERS, "Prefer": "return=representation" },
-      body: JSON.stringify(row),
+      body: JSON.stringify(rowWithId),
     });
+    if (!res.ok) throw new Error("http");
     const data = await res.json();
-    return Array.isArray(data) ? data[0] : data;
-  } catch { return null; }
+    const saved = Array.isArray(data) ? data[0] : data;
+    setCacheTable(table, getCacheTable(table).map(r => r.id === rowWithId.id ? saved : r));
+    return saved;
+  } catch {
+    pushToQueue({ type:"insert", table, row: rowWithId });
+    return rowWithId; // optimiste : l'UI continue avec l'id généré localement
+  }
 }
 
 async function dbPatch(table, id, patch) {
+  setCacheTable(table, getCacheTable(table).map(r => r.id === id ? { ...r, ...patch } : r));
   try {
-    await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
       method: "PATCH",
       headers: { ...HEADERS, "Prefer": "return=minimal" },
       body: JSON.stringify(patch),
     });
-  } catch { /* silencieux */ }
+    if (!res.ok) throw new Error("http");
+  } catch {
+    pushToQueue({ type:"patch", table, id, patch });
+  }
 }
 
 async function dbDelete(table, id) {
+  setCacheTable(table, getCacheTable(table).filter(r => r.id !== id));
   try {
-    await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
       method: "DELETE",
       headers: HEADERS,
     });
-  } catch { /* silencieux */ }
+    if (!res.ok) throw new Error("http");
+  } catch {
+    pushToQueue({ type:"delete", table, id });
+  }
 }
 // --- fin helpers Planificateur ---
+
+// Durées par défaut (en minutes) pour les étapes de routine dont la donnée vient de Supabase
+// et n'a donc pas forcément de champ "duration" (colonne absente en base) — utilisées uniquement
+// pour calculer les créneaux bloqués dans le Planificateur.
+const ROUTINE_STEP_DURATIONS = { m4: 30 };
 
 const DEFAULT_MORNING_ROUTINE = [
   { id: "m1", time: "05:50", icon: "☀️", label: "Réveil & Hydratation", desc: "Lever immédiat, 1 grand verre d'eau. Pas de téléphone. Respiration profonde 3 min." },
   { id: "m2", time: "06:00", icon: "🏠", label: "Responsabilités de la maison", desc: "1h dédiée aux tâches du foyer — ménage, rangement, ou ce qui est nécessaire. Pleine présence, sans téléphone." },
   { id: "m3", time: "07:00", icon: "🏃", label: "Sport · Douche · Méditation / Visualisation", desc: "1h complète : sport 30 min → douche → méditation et visualisation 15 min — ancrer l'intention du jour, clarté mentale." },
-  { id: "m4", time: "08:00", icon: "☕", label: "Petit-déjeuner", desc: "Repas nutritif et conscient. Pas d'écrans. Prendre le temps de bien manger avant de commencer la journée." },
+  { id: "m4", time: "08:00", icon: "☕", label: "Petit-déjeuner", desc: "Repas nutritif et conscient. Pas d'écrans. Prendre le temps de bien manger avant de commencer la journée. 30 min — fin à 8h30 max.", duration: 30 },
 ];
 
 const DEFAULT_EVENING_ROUTINE = [
@@ -139,7 +229,7 @@ const GOOGLE_CLIENT_ID = "475742292156-jh4j1m135g5oeco89ko8rasmab5u78ug.apps.goo
 const THEME_DARK = {
   bg0:"#0a0c10", bg1:"#0f1520", bg2:"#0d1219", bg3:"#0a0f18",
   border:"#1a2535", border2:"#141e2a", text:"#e8e0d4", text2:"#c8c0b4", muted:"#5a6a7a", muted2:"#3a4a5a",
-  headerEnd:"var(--headerEnd)", accentGold:"var(--accentGold)", accentOrange:"var(--accentOrange)", greenMuted:"var(--greenMuted)",
+  headerEnd:"#141b2a", accentGold:"#d4c9a0", accentOrange:"#f0a070", greenMuted:"#5a7a5a",
 };
 const THEME_LIGHT = {
   bg0:"#f4f1ea", bg1:"#ffffff", bg2:"#ece7db", bg3:"#eeeae0",
@@ -163,6 +253,40 @@ function downloadCSV(filename, rows) {
 }
 
 function pad2(n) { return String(n).padStart(2, "0"); }
+
+const HOUR_PX = 48;
+
+// Calcule la position/hauteur (façon Google Agenda) de chaque tâche datée d'une journée,
+// en gérant les chevauchements par colonnes côte à côte.
+function layoutDayTimedTasks(tasks, startH) {
+  const items = tasks.map(t => {
+    const [hh, mm] = t.scheduled_time.split(":").map(Number);
+    const start = hh + mm / 60;
+    const dur = Math.max(15, t.duration_minutes || 30) / 60;
+    return { task: t, start, end: start + dur };
+  }).sort((a, b) => a.start - b.start || a.end - b.end);
+
+  const colEnds = []; // dernière fin de chaque colonne
+  items.forEach(it => {
+    let col = colEnds.findIndex(end => end <= it.start + 0.001);
+    if (col === -1) { col = colEnds.length; colEnds.push(it.end); }
+    else colEnds[col] = it.end;
+    it.col = col;
+  });
+  items.forEach(it => {
+    const overlapping = items.filter(o => o.start < it.end - 0.001 && o.end > it.start + 0.001);
+    it.totalCols = Math.max(1, ...overlapping.map(o => o.col + 1));
+  });
+
+  return items.map(it => ({
+    task: it.task,
+    top: Math.max(0, (it.start - startH)) * HOUR_PX,
+    height: Math.max(20, (it.end - it.start) * HOUR_PX - 3),
+    leftPct: (it.col / it.totalCols) * 100,
+    widthPct: (100 / it.totalCols) - (it.totalCols > 1 ? 1.5 : 0),
+  }));
+}
+
 function toDateKey(d) { return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
 function getWeekStart(d = new Date()) {
   const x = new Date(d);
@@ -249,6 +373,19 @@ export default function App() {
   const [showArchivedHabits, setShowArchivedHabits] = useState(false);
   const [autoScheduling, setAutoScheduling] = useState(false);
   const rescheduledRef = useRef(false);
+  const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
+  const [syncQueueLen, setSyncQueueLen] = useState(0);
+  useEffect(() => {
+    setSyncQueueLen(getQueue().length);
+    const unsub = onSyncStateChange(q => setSyncQueueLen(q.length));
+    const goOnline = () => { setIsOnline(true); flushPendingQueue(); };
+    const goOffline = () => setIsOnline(false);
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    flushPendingQueue(); // tentative de synchro au chargement, au cas où
+    const interval = setInterval(() => { if (navigator.onLine) flushPendingQueue(); }, 20000);
+    return () => { unsub(); window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); clearInterval(interval); };
+  }, []);
   const notifiedTasksRef = useRef(new Set());
   const [now, setNow] = useState(new Date());
   const [syncing, setSyncing] = useState(false);
@@ -406,9 +543,19 @@ export default function App() {
   const EVENING_ROUTINE = eveningRoutine;
   const routineSpanHours = (list) => {
     if (!list.length) return [];
-    const hours = list.map(r => parseInt(r.time.slice(0,2),10));
-    const min = Math.min(...hours), max = Math.max(...hours);
-    const arr = []; for (let h = min; h <= max; h++) arr.push(h);
+    const startFrac = list.reduce((min, r) => {
+      const [hh, mm] = r.time.split(":").map(Number);
+      const f = hh + mm / 60;
+      return Math.min(min, f);
+    }, 24);
+    const last = list.reduce((acc, r) => {
+      const [hh, mm] = r.time.split(":").map(Number);
+      const f = hh + mm / 60;
+      return f > acc.f ? { f, r } : acc;
+    }, { f: -1, r: null });
+    const endFrac = last.f + (last.r ? (last.r.duration || ROUTINE_STEP_DURATIONS[last.r.id] || 60) : 60) / 60;
+    const arr = [];
+    for (let h = Math.floor(startFrac); h + 1 <= endFrac; h++) arr.push(h);
     return arr;
   };
   const blockedHours = new Set([...routineSpanHours(morningRoutine), ...routineSpanHours(eveningRoutine)]);
@@ -1141,8 +1288,9 @@ export default function App() {
           <div>
             <div style={{ fontSize:10, letterSpacing:4, color:"var(--greenMuted)", textTransform:"uppercase", fontFamily:"monospace", marginBottom:3, display:"flex", alignItems:"center", gap:8 }}>
               DISCIPLINE SYSTEM
-              <span style={{ fontSize:9, color: syncing ? "#f0b429" : syncOk === true ? "#68d391" : syncOk === false ? "#fb8a4a" : "var(--muted2)" }}>
-                {syncing ? "⟳ sync..." : syncOk === true ? "● en ligne" : syncOk === false ? "● hors ligne" : ""}
+              <span style={{ fontSize:9, color: !isOnline ? "#fb8a4a" : syncQueueLen>0 ? "#f0b429" : syncing ? "#f0b429" : syncOk === true ? "#68d391" : syncOk === false ? "#fb8a4a" : "var(--muted2)" }}
+                title={!isOnline ? "Hors ligne — tout est sauvegardé localement et se synchronisera au retour du réseau" : syncQueueLen>0 ? `${syncQueueLen} changement(s) en attente de synchronisation` : "Synchronisé avec le cloud"}>
+                {!isOnline ? "● hors ligne (local)" : syncQueueLen>0 ? `⟳ sync ${syncQueueLen} en attente` : syncing ? "⟳ sync..." : syncOk === true ? "● en ligne" : syncOk === false ? "● hors ligne" : ""}
               </span>
             </div>
             <div style={{ fontSize:20, fontWeight:"bold", color:"var(--accentGold)", letterSpacing:0.5 }}>{dateStr}</div>
@@ -1335,9 +1483,31 @@ export default function App() {
             : `${weekDays[0].toLocaleDateString("fr-FR",{day:"numeric",month:"short"})} — ${weekDays[weekDays.length-1].toLocaleDateString("fr-FR",{day:"numeric",month:"short"})}`;
           const editingTask = plannerTasks.find(t => t.id === editingTaskId);
 
-          const TaskCard = ({ task, checkable = true }) => {
+          const TaskCard = ({ task, checkable = true, compact = false, style = {} }) => {
             const lbl = labelById(task.label_id);
             const pr = PRIORITIES.find(p => p.val === task.priority) || PRIORITIES[1];
+            if (compact) {
+              return (
+                <div
+                  draggable
+                  onDragStart={() => setDragTaskId(task.id)}
+                  onClick={(e) => { e.stopPropagation(); setEditingTaskId(task.id); }}
+                  style={{
+                    background:"var(--bg1)", border:`1px solid ${lbl?lbl.color+"55":"var(--border)"}`, borderLeft:`3px solid ${pr.color}`,
+                    borderRadius:5, padding:"3px 6px", cursor:"grab", opacity: task.completed?0.45:1,
+                    height:"100%", overflow:"hidden", boxSizing:"border-box", boxShadow:"0 1px 3px #00000033",
+                    ...style,
+                  }}
+                >
+                  <div style={{ fontSize:11, lineHeight:1.2, color: task.completed?"#3a5a3a":"var(--text2)", textDecoration:task.completed?"line-through":"none", fontWeight:500 }}>
+                    {task.title}
+                  </div>
+                  <div style={{ fontSize:9, color:"var(--muted)", fontFamily:"monospace", marginTop:1 }}>
+                    {task.scheduled_time?.slice(0,5)}{task.duration_minutes ? ` · ${task.duration_minutes}min` : ""}
+                  </div>
+                </div>
+              );
+            }
             return (
               <div
                 draggable
@@ -1497,24 +1667,32 @@ export default function App() {
                           </div>
                         ))}
                         {untimed.map(t => <TaskCard key={t.id} task={t} />)}
-                        <div style={{ borderTop:"1px solid var(--border2)", marginTop:4, paddingTop:4 }}>
-                          {PLANNER_HOURS.map(h => {
-                            const slotTasks = dayTasks.filter(t => t.scheduled_time && parseInt(t.scheduled_time.slice(0,2),10)===h);
+                        <div style={{ position:"relative", borderTop:"1px solid var(--border2)", marginTop:4 }}>
+                          {/* Lignes horaires (fond + zones de dépôt) */}
+                          {PLANNER_HOURS.map((h, idx) => {
                             const blocked = blockedHours.has(h);
                             return (
                               <div key={h}
                                 onDragOver={e => { if (!blocked) e.preventDefault(); }}
                                 onDrop={(e) => { e.stopPropagation(); if (!blocked) dropOnSlot(dateKey, h); }}
                                 onClick={() => { if (!blocked) addTaskAt(dateKey, `${pad2(h)}:00`); }}
-                                style={{ minHeight:26, borderBottom:"1px solid #10182422", padding:"2px 0",
+                                style={{ position:"absolute", top: idx*HOUR_PX, left:0, right:0, height:HOUR_PX,
+                                  borderBottom:"1px solid var(--border2)", padding:"2px 0",
                                   cursor: blocked ? "not-allowed" : "pointer",
                                   background: blocked ? "#1a141422" : "transparent" }}
                                 title={blocked ? "Créneau réservé à une routine" : "Cliquer pour un time-blocking à cette heure"}>
                                 <div style={{ fontSize:8, color: blocked ? "#5a4a3a" : "var(--muted2)", fontFamily:"monospace" }}>{pad2(h)}h{blocked ? " 🔒" : ""}</div>
-                                {slotTasks.map(t => <TaskCard key={t.id} task={t} />)}
                               </div>
                             );
                           })}
+                          {/* Espaceur pour donner sa hauteur totale au conteneur */}
+                          <div style={{ height: PLANNER_HOURS.length * HOUR_PX }} />
+                          {/* Blocs de tâches positionnés selon leur heure et durée, façon Google Agenda */}
+                          {layoutDayTimedTasks(dayTasks.filter(t => t.scheduled_time), PLANNER_HOURS[0]).map(({ task, top, height, leftPct, widthPct }) => (
+                            <div key={task.id} style={{ position:"absolute", top, height, left:`${leftPct}%`, width:`${widthPct}%`, zIndex:2, pointerEvents:"auto" }}>
+                              <TaskCard task={task} compact />
+                            </div>
+                          ))}
                         </div>
                       </div>
                     );
