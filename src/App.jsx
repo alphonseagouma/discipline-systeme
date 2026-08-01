@@ -204,9 +204,9 @@ const DEFAULT_TASKS = [
 
 // --- Constantes Planificateur ---
 const PRIORITIES = [
-  { val: "haute", label: "Haute", color: "#fb8a4a" },
-  { val: "moyenne", label: "Moyenne", color: "#f0b429" },
-  { val: "basse", label: "Basse", color: "#8ab4f8" },
+  { val: "haute", label: "Haute", color: "var(--accentOrange2)" },
+  { val: "moyenne", label: "Moyenne", color: "var(--accentAmber)" },
+  { val: "basse", label: "Basse", color: "var(--accentBlue)" },
 ];
 const RECURRENCES = [
   { val: "aucune", label: "Aucune" },
@@ -237,11 +237,14 @@ const THEME_DARK = {
   bg0:"#0a0c10", bg1:"#0f1520", bg2:"#0d1219", bg3:"#0a0f18",
   border:"#1a2535", border2:"#141e2a", text:"#e8e0d4", text2:"#c8c0b4", muted:"#5a6a7a", muted2:"#3a4a5a",
   headerEnd:"#141b2a", accentGold:"#d4c9a0", accentOrange:"#f0a070", greenMuted:"#5a7a5a",
+  accentBlue:"#8ab4f8", accentGreen:"#68d391", accentAmber:"#f0b429", accentOrange2:"#fb8a4a", accentPurple:"#c084fc",
 };
 const THEME_LIGHT = {
   bg0:"#f4f1ea", bg1:"#ffffff", bg2:"#ece7db", bg3:"#eeeae0",
   border:"#d8d0c0", border2:"#e4ddce", text:"#2a2418", text2:"#4a4030", muted:"#7a7060", muted2:"#a89e8c",
   headerEnd:"#ddd3ba", accentGold:"#8a6a2a", accentOrange:"#b85a2a", greenMuted:"#3a5a3a",
+  // Variantes plus saturées/foncées pour rester lisibles sur fond clair (contraste AA sur blanc)
+  accentBlue:"#2563eb", accentGreen:"#15803d", accentAmber:"#b45309", accentOrange2:"#c2410c", accentPurple:"#9333ea",
 };
 const GOOGLE_SCOPE = "https://www.googleapis.com/auth/calendar";
 
@@ -1365,7 +1368,7 @@ export default function App() {
     { id: "settings", label: "⚙️ Paramètres" },
   ];
 
-  const CheckBox = ({ checked, color = "#68d391" }) => (
+  const CheckBox = ({ checked, color = "var(--accentGreen)" }) => (
     <div style={{
       width: 26, height: 26, borderRadius: 5, flexShrink: 0,
       border: `2px solid ${checked ? color : "var(--border)"}`,
@@ -1460,7 +1463,7 @@ export default function App() {
 
   return (
     <div style={{
-      minHeight:"100vh", background:"var(--bg0)", color:"var(--text)", fontFamily:"'Georgia', serif",
+      minHeight:"100vh", background:"var(--bg0)", color:"var(--text)", fontFamily:"'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
       "--bg0": (settings.theme==="light"?THEME_LIGHT:THEME_DARK).bg0,
       "--bg1": (settings.theme==="light"?THEME_LIGHT:THEME_DARK).bg1,
       "--bg2": (settings.theme==="light"?THEME_LIGHT:THEME_DARK).bg2,
@@ -1475,6 +1478,11 @@ export default function App() {
       "--accentGold": (settings.theme==="light"?THEME_LIGHT:THEME_DARK).accentGold,
       "--accentOrange": (settings.theme==="light"?THEME_LIGHT:THEME_DARK).accentOrange,
       "--greenMuted": (settings.theme==="light"?THEME_LIGHT:THEME_DARK).greenMuted,
+      "--accentBlue": (settings.theme==="light"?THEME_LIGHT:THEME_DARK).accentBlue,
+      "--accentGreen": (settings.theme==="light"?THEME_LIGHT:THEME_DARK).accentGreen,
+      "--accentAmber": (settings.theme==="light"?THEME_LIGHT:THEME_DARK).accentAmber,
+      "--accentOrange2": (settings.theme==="light"?THEME_LIGHT:THEME_DARK).accentOrange2,
+      "--accentPurple": (settings.theme==="light"?THEME_LIGHT:THEME_DARK).accentPurple,
     }}>
       {/* Header */}
       <div style={{ background:"linear-gradient(135deg,var(--bg2) 0%,var(--headerEnd) 100%)", borderBottom:"1px solid var(--border2)", padding:"18px 24px 0", position:"sticky", top:0, zIndex:100 }}>
@@ -1482,7 +1490,7 @@ export default function App() {
           <div>
             <div style={{ fontSize:10, letterSpacing:4, color:"var(--greenMuted)", textTransform:"uppercase", fontFamily:"monospace", marginBottom:3, display:"flex", alignItems:"center", gap:8 }}>
               DISCIPLINE SYSTEM
-              <span style={{ fontSize:9, color: !isOnline ? "#fb8a4a" : syncQueueLen>0 ? "#f0b429" : syncing ? "#f0b429" : syncOk === true ? "#68d391" : syncOk === false ? "#fb8a4a" : "var(--muted2)" }}
+              <span style={{ fontSize:9, color: !isOnline ? "var(--accentOrange2)" : syncQueueLen>0 ? "var(--accentAmber)" : syncing ? "var(--accentAmber)" : syncOk === true ? "var(--accentGreen)" : syncOk === false ? "var(--accentOrange2)" : "var(--muted2)" }}
                 title={!isOnline ? "Hors ligne — tout est sauvegardé localement et se synchronisera au retour du réseau" : syncQueueLen>0 ? `${syncQueueLen} changement(s) en attente de synchronisation` : "Synchronisé avec le cloud"}>
                 {!isOnline ? "● hors ligne (local)" : syncQueueLen>0 ? `⟳ sync ${syncQueueLen} en attente` : syncing ? "⟳ sync..." : syncOk === true ? "● en ligne" : syncOk === false ? "● hors ligne" : ""}
               </span>
@@ -1491,7 +1499,7 @@ export default function App() {
           </div>
           <div style={{ textAlign:"right" }}>
             <div style={{ display:"flex", alignItems:"center", gap:8, justifyContent:"flex-end" }}>
-              <div style={{ fontSize:26, fontWeight:"bold", color:"#8ab4f8", fontFamily:"monospace" }}>{timeStr}</div>
+              <div style={{ fontSize:26, fontWeight:"bold", color:"var(--accentBlue)", fontFamily:"monospace" }}>{timeStr}</div>
               <div onClick={() => setShowShortcuts(true)} title="Raccourcis clavier (?)" style={{ width:22, height:22, borderRadius:"50%", border:"1px solid var(--border2)", color:"var(--muted)", fontSize:11, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer" }}>?</div>
             </div>
             <div style={{ fontSize:10, color:"var(--muted)", letterSpacing:1, marginTop:2 }}>
@@ -1525,16 +1533,16 @@ export default function App() {
           return (
             <div>
               <div style={{ marginBottom:20 }}>
-                <div style={{ fontSize:10, letterSpacing:4, color:"#68d391", textTransform:"uppercase", marginBottom:5 }}>Vue unifiée</div>
+                <div style={{ fontSize:10, letterSpacing:4, color:"var(--accentGreen)", textTransform:"uppercase", marginBottom:5 }}>Vue unifiée</div>
                 <div style={{ fontSize:26, color:"var(--text)", fontWeight:"bold", textTransform:"capitalize" }}>{dateStr}</div>
               </div>
 
               {/* Jauges */}
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12, marginBottom:22 }}>
                 {[
-                  { label:"Routine Matin", done:completedMorn, total:MORNING_ROUTINE.length, color:"#f0b429" },
-                  { label:"Tâches du jour", done:doneToday, total:Math.max(todayPlannerTasks.length,1), color:"#68d391" },
-                  { label:"Routine Soir", done:completedEve, total:EVENING_ROUTINE.length, color:"#8ab4f8" },
+                  { label:"Routine Matin", done:completedMorn, total:MORNING_ROUTINE.length, color:"var(--accentAmber)" },
+                  { label:"Tâches du jour", done:doneToday, total:Math.max(todayPlannerTasks.length,1), color:"var(--accentGreen)" },
+                  { label:"Routine Soir", done:completedEve, total:EVENING_ROUTINE.length, color:"var(--accentBlue)" },
                 ].map(({ label,done,total,color }) => {
                   const pct = Math.round((done/total)*100);
                   const circ = 2*Math.PI*30;
@@ -1556,14 +1564,14 @@ export default function App() {
 
               {/* Tâches du jour (max 6, gérées depuis le Planificateur) */}
               <div style={{ background:"var(--bg1)", borderRadius:10, border:"1px solid var(--border)", padding:"16px 18px", marginBottom:16 }}>
-                <div style={{ fontSize:10, letterSpacing:3, color:"#68d391", textTransform:"uppercase", marginBottom:12 }}>✅ Tâches du jour ({doneToday}/{todayPlannerTasks.length || 0} · max 6)</div>
+                <div style={{ fontSize:10, letterSpacing:3, color:"var(--accentGreen)", textTransform:"uppercase", marginBottom:12 }}>✅ Tâches du jour ({doneToday}/{todayPlannerTasks.length || 0} · max 6)</div>
                 {todayPlannerTasks.length === 0 && <div style={{ fontSize:11, color:"var(--muted2)", fontStyle:"italic" }}>Aucune tâche planifiée aujourd'hui — ajoute-en depuis le 🗓️ Planificateur.</div>}
                 {todayPlannerTasks.map(t => {
                   const pr = PRIORITIES.find(p => p.val === t.priority) || PRIORITIES[1];
                   return (
                     <div key={t.id} onClick={() => toggleTaskDone(t)} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderBottom:"1px solid var(--border2)", cursor:"pointer" }}>
                       <CheckBox checked={!!t.completed} color={pr.color}/>
-                      {t.scheduled_time && <span style={{ fontSize:10, color:"#8ab4f8", fontFamily:"monospace" }}>{t.scheduled_time.slice(0,5)}</span>}
+                      {t.scheduled_time && <span style={{ fontSize:10, color:"var(--accentBlue)", fontFamily:"monospace" }}>{t.scheduled_time.slice(0,5)}</span>}
                       <div style={{ fontSize:13, flex:1, color:t.completed?"#3a5a3a":"var(--text2)", textDecoration:t.completed?"line-through":"none" }}>{t.title}</div>
                     </div>
                   );
@@ -1573,19 +1581,19 @@ export default function App() {
               {/* Routines compactes */}
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
                 <div style={{ background:"var(--bg1)", borderRadius:10, border:"1px solid var(--border)", padding:"14px 16px" }}>
-                  <div style={{ fontSize:10, letterSpacing:2, color:"#f0b429", textTransform:"uppercase", marginBottom:10 }}>🌅 Matin ({completedMorn}/{MORNING_ROUTINE.length})</div>
+                  <div style={{ fontSize:10, letterSpacing:2, color:"var(--accentAmber)", textTransform:"uppercase", marginBottom:10 }}>🌅 Matin ({completedMorn}/{MORNING_ROUTINE.length})</div>
                   {MORNING_ROUTINE.map(r => (
                     <div key={r.id} onClick={() => toggleRoutine(r.id)} style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 0", cursor:"pointer" }}>
-                      <CheckBox checked={!!checkedRoutine[r.id]} color="#f0b429"/>
+                      <CheckBox checked={!!checkedRoutine[r.id]} color="var(--accentAmber)"/>
                       <div style={{ fontSize:12, color:checkedRoutine[r.id]?"#4a7a3a":"var(--text2)", textDecoration:checkedRoutine[r.id]?"line-through":"none" }}>{r.icon} {r.label}</div>
                     </div>
                   ))}
                 </div>
                 <div style={{ background:"var(--bg1)", borderRadius:10, border:"1px solid var(--border)", padding:"14px 16px" }}>
-                  <div style={{ fontSize:10, letterSpacing:2, color:"#8ab4f8", textTransform:"uppercase", marginBottom:10 }}>🌙 Soir ({completedEve}/{EVENING_ROUTINE.length})</div>
+                  <div style={{ fontSize:10, letterSpacing:2, color:"var(--accentBlue)", textTransform:"uppercase", marginBottom:10 }}>🌙 Soir ({completedEve}/{EVENING_ROUTINE.length})</div>
                   {EVENING_ROUTINE.map(r => (
                     <div key={r.id} onClick={() => toggleRoutine(r.id)} style={{ display:"flex", alignItems:"center", gap:8, padding:"5px 0", cursor:"pointer" }}>
-                      <CheckBox checked={!!checkedRoutine[r.id]} color="#8ab4f8"/>
+                      <CheckBox checked={!!checkedRoutine[r.id]} color="var(--accentBlue)"/>
                       <div style={{ fontSize:12, color:checkedRoutine[r.id]?"#3a3a7a":"var(--text2)", textDecoration:checkedRoutine[r.id]?"line-through":"none" }}>{r.icon} {r.label}</div>
                     </div>
                   ))}
@@ -1622,7 +1630,7 @@ export default function App() {
                     style={{ width:"100%", boxSizing:"border-box", background:"var(--bg0)", border:"1px solid var(--border)", borderRadius:5, padding:"6px 8px", color:"var(--text2)", fontSize:12, outline:"none", resize:"vertical", marginBottom:6 }} />
                   <div style={{ display:"flex", gap:6 }}>
                     <button onClick={() => setEditingRoutineId(null)} style={{ flex:1, background:"#68d391", border:"none", borderRadius:5, padding:"6px 0", color:"var(--bg0)", fontSize:12, fontWeight:"bold", cursor:"pointer" }}>OK</button>
-                    <button onClick={() => deleteRoutineItem(period, r.id)} style={{ background:"#fb8a4a18", border:"1px solid #fb8a4a55", borderRadius:5, padding:"6px 12px", color:"#fb8a4a", fontSize:12, cursor:"pointer" }}>🗑️</button>
+                    <button onClick={() => deleteRoutineItem(period, r.id)} style={{ background:"#fb8a4a18", border:"1px solid #fb8a4a55", borderRadius:5, padding:"6px 12px", color:"var(--accentOrange2)", fontSize:12, cursor:"pointer" }}>🗑️</button>
                   </div>
                 </div>
               );
@@ -1648,17 +1656,17 @@ export default function App() {
           return (
             <div>
               <div style={{ marginBottom:22 }}>
-                <div style={{ fontSize:10, letterSpacing:4, color:"#f0b429", textTransform:"uppercase", marginBottom:5 }}>Rituels quotidiens</div>
+                <div style={{ fontSize:10, letterSpacing:4, color:"var(--accentAmber)", textTransform:"uppercase", marginBottom:5 }}>Rituels quotidiens</div>
                 <div style={{ fontSize:26, color:"var(--text)", fontWeight:"bold" }}>Routines</div>
                 <div style={{ fontSize:12, color:"var(--muted)", marginTop:5 }}>{completedMorn+completedEve}/{MORNING_ROUTINE.length+EVENING_ROUTINE.length} étapes accomplies · clique ✏️ pour modifier</div>
               </div>
 
-              <div style={{ fontSize:11, letterSpacing:2, color:"#f0b429", textTransform:"uppercase", marginBottom:10 }}>🌅 Matin ({completedMorn}/{MORNING_ROUTINE.length})</div>
-              {MORNING_ROUTINE.map(r => <RoutineRow key={r.id} r={r} period="morning" color="#f0b429" bgOn="#68d39122" />)}
+              <div style={{ fontSize:11, letterSpacing:2, color:"var(--accentAmber)", textTransform:"uppercase", marginBottom:10 }}>🌅 Matin ({completedMorn}/{MORNING_ROUTINE.length})</div>
+              {MORNING_ROUTINE.map(r => <RoutineRow key={r.id} r={r} period="morning" color="var(--accentAmber)" bgOn="#68d39122" />)}
               <button onClick={() => addRoutineItem("morning")} style={{ width:"100%", background:"var(--bg3)", border:"1px dashed var(--border)", borderRadius:9, padding:"8px", color:"var(--muted2)", fontSize:12, cursor:"pointer", marginBottom:20 }}>+ Ajouter une étape matin</button>
 
-              <div style={{ fontSize:11, letterSpacing:2, color:"#8ab4f8", textTransform:"uppercase", margin:"22px 0 10px" }}>🌙 Soir ({completedEve}/{EVENING_ROUTINE.length})</div>
-              {EVENING_ROUTINE.map(r => <RoutineRow key={r.id} r={r} period="evening" color="#8ab4f8" bgOn="#8ab4f822" />)}
+              <div style={{ fontSize:11, letterSpacing:2, color:"var(--accentBlue)", textTransform:"uppercase", margin:"22px 0 10px" }}>🌙 Soir ({completedEve}/{EVENING_ROUTINE.length})</div>
+              {EVENING_ROUTINE.map(r => <RoutineRow key={r.id} r={r} period="evening" color="var(--accentBlue)" bgOn="#8ab4f822" />)}
               <button onClick={() => addRoutineItem("evening")} style={{ width:"100%", background:"var(--bg3)", border:"1px dashed var(--border)", borderRadius:9, padding:"8px", color:"var(--muted2)", fontSize:12, cursor:"pointer", marginBottom:20 }}>+ Ajouter une étape soir</button>
 
               <div style={{ background:"var(--bg3)", borderRadius:9, border:"1px solid var(--border2)", padding:"16px 18px", textAlign:"center", marginTop:12 }}>
@@ -1737,13 +1745,13 @@ export default function App() {
                 </div>
                 <div style={{ display:"flex", gap:6, marginTop:5, flexWrap:"wrap" }}>
                   {task.duration_minutes && <span style={{ fontSize:9, color:"var(--muted)", fontFamily:"monospace" }}>⏱ {task.duration_minutes}min</span>}
-                  {task.scheduled_time && <span style={{ fontSize:9, color:"#8ab4f8", fontFamily:"monospace" }}>{task.scheduled_time.slice(0,5)}</span>}
+                  {task.scheduled_time && <span style={{ fontSize:9, color:"var(--accentBlue)", fontFamily:"monospace" }}>{task.scheduled_time.slice(0,5)}</span>}
                   {lbl && <span style={{ fontSize:9, color:lbl.color, background:lbl.color+"22", borderRadius:4, padding:"1px 6px" }}>{lbl.name}</span>}
                   {task.recurrence!=="aucune" && <span style={{ fontSize:9, color:"var(--muted)" }}>🔁 {RECURRENCES.find(r=>r.val===task.recurrence)?.label}</span>}
-                  {task.window_start && <span style={{ fontSize:9, color:"#8ab4f8" }} title={`Fenêtre : ${task.window_start.slice(0,5)}–${task.window_end?.slice(0,5)}`}>🕘 {task.window_start.slice(0,5)}–{task.window_end?.slice(0,5)}</span>}
+                  {task.window_start && <span style={{ fontSize:9, color:"var(--accentBlue)" }} title={`Fenêtre : ${task.window_start.slice(0,5)}–${task.window_end?.slice(0,5)}`}>🕘 {task.window_start.slice(0,5)}–{task.window_end?.slice(0,5)}</span>}
                   <span onClick={(e) => { e.stopPropagation(); patchPlannerTask(task.id, { locked: !task.locked }); }}
                     title={task.locked ? "Verrouillée — clique pour rendre flexible" : "Flexible — clique pour verrouiller"}
-                    style={{ fontSize:9, color: task.locked?"#fb8a4a":"var(--muted2)", cursor:"pointer" }}>{task.locked ? "🔒" : "🔓"}</span>
+                    style={{ fontSize:9, color: task.locked?"var(--accentOrange2)":"var(--muted2)", cursor:"pointer" }}>{task.locked ? "🔒" : "🔓"}</span>
                 </div>
               </div>
             );
@@ -1756,7 +1764,7 @@ export default function App() {
           return (
             <div>
               <div style={{ marginBottom:18 }}>
-                <div style={{ fontSize:10, letterSpacing:4, color:"#8ab4f8", textTransform:"uppercase", marginBottom:5 }}>Organisation</div>
+                <div style={{ fontSize:10, letterSpacing:4, color:"var(--accentBlue)", textTransform:"uppercase", marginBottom:5 }}>Organisation</div>
                 <div style={{ fontSize:26, color:"var(--text)", fontWeight:"bold" }}>Planificateur</div>
                 <div style={{ fontSize:12, color:"var(--muted)", marginTop:5 }}>Clique un jour ou un créneau pour créer une tâche · glisse pour replanifier</div>
               </div>
@@ -1769,7 +1777,7 @@ export default function App() {
                 return (
                   <div style={{ background:"#8ab4f818", border:"1px solid #8ab4f855", borderRadius:9, padding:"10px 14px", marginBottom:14, display:"flex", alignItems:"center", gap:10, cursor:"pointer" }}
                     onClick={() => setEditingTaskId(next.id)}>
-                    <span style={{ fontSize:11, color:"#8ab4f8", fontFamily:"monospace" }}>⏳ {remainingToday.length} restante{remainingToday.length>1?"s":""}</span>
+                    <span style={{ fontSize:11, color:"var(--accentBlue)", fontFamily:"monospace" }}>⏳ {remainingToday.length} restante{remainingToday.length>1?"s":""}</span>
                     <span style={{ fontSize:12, color:"var(--text2)", flex:1 }}>
                       Maintenant : <b>{next.title}</b>{next.scheduled_time && <span style={{ color:"var(--muted)" }}> · {next.scheduled_time.slice(0,5)}</span>}
                     </span>
@@ -1781,45 +1789,45 @@ export default function App() {
               <div style={{ display:"flex", gap:6, marginBottom:12 }}>
                 {[["day","Jour"],["3day","3 jours"],["week","Semaine"]].map(([m,l]) => (
                   <button key={m} onClick={() => setPlannerViewMode(m)} style={{
-                    background: plannerViewMode===m ? "#8ab4f822" : "var(--bg1)", border:`1px solid ${plannerViewMode===m?"#8ab4f8":"var(--border)"}`,
-                    borderRadius:6, color: plannerViewMode===m?"#8ab4f8":"var(--muted)", padding:"5px 12px", cursor:"pointer", fontSize:11 }}>{l}</button>
+                    background: plannerViewMode===m ? "#8ab4f822" : "var(--bg1)", border:`1px solid ${plannerViewMode===m?"var(--accentBlue)":"var(--border)"}`,
+                    borderRadius:6, color: plannerViewMode===m?"var(--accentBlue)":"var(--muted)", padding:"5px 12px", cursor:"pointer", fontSize:11 }}>{l}</button>
                 ))}
               </div>
 
               {/* Barre navigation */}
               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14, flexWrap:"wrap", gap:8 }}>
                 <button onClick={() => shiftRange(-1)}
-                  style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"#8ab4f8", padding:"6px 12px", cursor:"pointer", fontSize:13 }}>←</button>
+                  style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"var(--accentBlue)", padding:"6px 12px", cursor:"pointer", fontSize:13 }}>←</button>
                 <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
                   <span style={{ fontSize:13, color:"var(--text2)", fontFamily:"monospace", textTransform:"capitalize" }}>{rangeLabel}</span>
                   <button onClick={() => setPlannerStart(startOfDay())} style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"var(--muted)", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>Aujourd'hui</button>
-                  <button onClick={() => setShowLabelManager(s => !s)} style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"#c084fc", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>🏷️ Étiquettes</button>
+                  <button onClick={() => setShowLabelManager(s => !s)} style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"var(--accentPurple)", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>🏷️ Étiquettes</button>
                   {(inboxTasks.length > 0 || plannerTasks.some(t => t.scheduled_date && !t.completed)) && (
                     <button onClick={autoScheduleAll} disabled={autoScheduling}
                       title="Replanifie toutes les tâches non terminées : d'abord celles déjà dans le calendrier (par échéance), puis l'inbox (par priorité)"
-                      style={{ background:"#68d39118", border:"1px solid #68d39155", borderRadius:6, color:"#68d391", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>
+                      style={{ background:"#68d39118", border:"1px solid #68d39155", borderRadius:6, color:"var(--accentGreen)", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>
                       {autoScheduling ? "⟳ Planification..." : "🪄 Autoplanifier"}
                     </button>
                   )}
                   <button onClick={() => duplicateDay(rangeCount===1 ? toDateKey(weekDays[0]) : toDateKey(startOfDay()))}
                     title="Copie les tâches du jour affiché (ou d'aujourd'hui) sur le lendemain"
-                    style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"#c084fc", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>📋 Dupliquer le jour →</button>
+                    style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"var(--accentPurple)", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>📋 Dupliquer le jour →</button>
                   <button onClick={() => duplicateWeek(getWeekStart(weekDays[0]))}
                     title="Copie toutes les tâches de la semaine affichée sur la semaine suivante"
-                    style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"#c084fc", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>📋 Dupliquer la semaine →</button>
+                    style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"var(--accentPurple)", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>📋 Dupliquer la semaine →</button>
                   {googleToken ? (
-                    <button onClick={disconnectGoogle} style={{ background:"#68d39118", border:"1px solid #68d39155", borderRadius:6, color:"#68d391", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>📅 Google connecté {googleLoading?"⟳":""}</button>
+                    <button onClick={disconnectGoogle} style={{ background:"#68d39118", border:"1px solid #68d39155", borderRadius:6, color:"var(--accentGreen)", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>📅 Google connecté {googleLoading?"⟳":""}</button>
                   ) : (
-                    <button onClick={connectGoogle} style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"#8ab4f8", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>📅 Connecter Google Calendar</button>
+                    <button onClick={connectGoogle} style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"var(--accentBlue)", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>📅 Connecter Google Calendar</button>
                   )}
                 </div>
                 <button onClick={() => shiftRange(1)}
-                  style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"#8ab4f8", padding:"6px 12px", cursor:"pointer", fontSize:13 }}>→</button>
+                  style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"var(--accentBlue)", padding:"6px 12px", cursor:"pointer", fontSize:13 }}>→</button>
               </div>
 
               {showLabelManager && (
                 <div style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:10, padding:14, marginBottom:14 }}>
-                  <div style={{ fontSize:10, letterSpacing:2, color:"#c084fc", textTransform:"uppercase", marginBottom:10 }}>Gérer les étiquettes</div>
+                  <div style={{ fontSize:10, letterSpacing:2, color:"var(--accentPurple)", textTransform:"uppercase", marginBottom:10 }}>Gérer les étiquettes</div>
                   {plannerLabels.map(l => (
                     <div key={l.id} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
                       <div style={{ width:12, height:12, borderRadius:3, background:l.color }} />
@@ -1850,7 +1858,7 @@ export default function App() {
                       <input value={newInboxTitle} onChange={e => setNewInboxTitle(e.target.value)}
                         onKeyDown={e => e.key==="Enter" && addInboxTask()} placeholder="Nouvelle tâche..."
                         style={{ flex:1, background:"var(--bg0)", border:"1px solid var(--border)", borderRadius:5, padding:"6px 8px", color:"var(--text)", fontSize:11, outline:"none" }} />
-                      <button onClick={addInboxTask} style={{ background:"var(--border)", border:"none", borderRadius:5, color:"#68d391", padding:"0 8px", cursor:"pointer" }}>+</button>
+                      <button onClick={addInboxTask} style={{ background:"var(--border)", border:"none", borderRadius:5, color:"var(--accentGreen)", padding:"0 8px", cursor:"pointer" }}>+</button>
                     </div>
                     {inboxTasks.map(t => <TaskCard key={t.id} task={t} checkable={false} />)}
                     {inboxTasks.length===0 && <div style={{ fontSize:11, color:"var(--muted2)", textAlign:"center", marginTop:10 }}>Vide</div>}
@@ -1867,12 +1875,12 @@ export default function App() {
                         onDragOver={e => e.preventDefault()} onDrop={() => dropOnDay(dateKey)}
                         style={{ background: isToday?"#68d39118":"var(--bg3)", border:`1px solid ${isToday?"#68d39155":"var(--border2)"}`, borderRadius:9, padding:8, minWidth:130 }}>
                         <div onClick={() => addTaskAt(dateKey)} style={{ textAlign:"center", marginBottom:8, cursor:"pointer" }} title="Cliquer pour ajouter une tâche ce jour">
-                          <div style={{ fontSize:10, color:isToday?"#68d391":"var(--muted)", fontFamily:"monospace", textTransform:"uppercase" }}>{day.toLocaleDateString("fr-FR",{weekday:"short"})}</div>
-                          <div style={{ fontSize:15, color:isToday?"#68d391":"var(--text2)", fontWeight:"bold" }}>{day.getDate()} <span style={{fontSize:11}}>+</span></div>
-                          <div style={{ fontSize:9, color: dayTasks.length>=6 ? "#fb8a4a" : "var(--muted2)", fontFamily:"monospace" }}>{dayTasks.length}/6</div>
+                          <div style={{ fontSize:10, color:isToday?"var(--accentGreen)":"var(--muted)", fontFamily:"monospace", textTransform:"uppercase" }}>{day.toLocaleDateString("fr-FR",{weekday:"short"})}</div>
+                          <div style={{ fontSize:15, color:isToday?"var(--accentGreen)":"var(--text2)", fontWeight:"bold" }}>{day.getDate()} <span style={{fontSize:11}}>+</span></div>
+                          <div style={{ fontSize:9, color: dayTasks.length>=6 ? "var(--accentOrange2)" : "var(--muted2)", fontFamily:"monospace" }}>{dayTasks.length}/6</div>
                         </div>
                         {eventsForDay(dateKey).map(ev => (
-                          <div key={ev.id} style={{ background:"#c084fc18", border:"1px solid #c084fc55", borderRadius:6, padding:"5px 8px", marginBottom:6, fontSize:11, color:"#c084fc" }}>
+                          <div key={ev.id} style={{ background:"#c084fc18", border:"1px solid #c084fc55", borderRadius:6, padding:"5px 8px", marginBottom:6, fontSize:11, color:"var(--accentPurple)" }}>
                             📅 {ev.summary || "(sans titre)"}
                             {ev.start?.dateTime && <div style={{ fontSize:9, color:"#8a6ab0", marginTop:2 }}>{new Date(ev.start.dateTime).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})}</div>}
                           </div>
@@ -1915,7 +1923,7 @@ export default function App() {
               {editingTask && (
                 <div onClick={() => setEditingTaskId(null)} style={{ position:"fixed", inset:0, background:"#000000aa", display:"flex", alignItems:"center", justifyContent:"center", zIndex:200 }}>
                   <div onClick={e => e.stopPropagation()} style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:10, padding:20, width:320, maxWidth:"90vw" }}>
-                    <div style={{ fontSize:10, letterSpacing:2, color:"#8ab4f8", textTransform:"uppercase", marginBottom:12 }}>Modifier la tâche</div>
+                    <div style={{ fontSize:10, letterSpacing:2, color:"var(--accentBlue)", textTransform:"uppercase", marginBottom:12 }}>Modifier la tâche</div>
                     <input value={editingTask.title} onChange={e => patchPlannerTask(editingTask.id, { title: e.target.value })}
                       autoFocus
                       style={{ width:"100%", boxSizing:"border-box", background:"var(--bg0)", border:"1px solid var(--border)", borderRadius:6, padding:"8px 10px", color:"var(--text)", fontSize:13, marginBottom:10, outline:"none" }} />
@@ -1935,8 +1943,8 @@ export default function App() {
                         <div key={m} onClick={() => patchPlannerTask(editingTask.id, { duration_minutes: m })}
                           style={{ flex:1, textAlign:"center", padding:"5px 0", borderRadius:6, cursor:"pointer", fontSize:10,
                             background: editingTask.duration_minutes===m ? "#8ab4f822" : "var(--bg3)",
-                            border:`1px solid ${editingTask.duration_minutes===m?"#8ab4f8":"var(--border)"}`,
-                            color: editingTask.duration_minutes===m?"#8ab4f8":"var(--muted)" }}>{m>=60?`${m/60}h${m%60||""}`:`${m}m`}</div>
+                            border:`1px solid ${editingTask.duration_minutes===m?"var(--accentBlue)":"var(--border)"}`,
+                            color: editingTask.duration_minutes===m?"var(--accentBlue)":"var(--muted)" }}>{m>=60?`${m/60}h${m%60||""}`:`${m}m`}</div>
                       ))}
                     </div>
 
@@ -1956,7 +1964,7 @@ export default function App() {
                         background: editingTask.locked ? "#fb8a4a18" : "var(--bg3)", border:`1px solid ${editingTask.locked?"#fb8a4a55":"var(--border)"}` }}>
                       <span style={{ fontSize:16 }}>{editingTask.locked ? "🔒" : "🔓"}</span>
                       <div style={{ flex:1 }}>
-                        <div style={{ fontSize:12, color: editingTask.locked ? "#fb8a4a" : "var(--text2)" }}>
+                        <div style={{ fontSize:12, color: editingTask.locked ? "var(--accentOrange2)" : "var(--text2)" }}>
                           {editingTask.locked ? "Verrouillée — jamais déplacée automatiquement" : "Flexible — peut être replanifiée automatiquement"}
                         </div>
                         <div style={{ fontSize:9, color:"var(--muted)", marginTop:2 }}>Clique pour {editingTask.locked ? "déverrouiller" : "verrouiller"}</div>
@@ -1971,7 +1979,7 @@ export default function App() {
                           <div key={w.label} onClick={() => patchPlannerTask(editingTask.id, { window_start: w.start, window_end: w.end })}
                             style={{ padding:"5px 10px", borderRadius:5, cursor:"pointer", fontSize:11,
                               background: active ? "#8ab4f822" : "var(--bg3)",
-                              border:`1px solid ${active?"#8ab4f8":"var(--border)"}`, color: active?"#8ab4f8":"var(--muted)" }}>{w.icon} {w.label}</div>
+                              border:`1px solid ${active?"var(--accentBlue)":"var(--border)"}`, color: active?"var(--accentBlue)":"var(--muted)" }}>{w.icon} {w.label}</div>
                         );
                       })}
                     </div>
@@ -2035,13 +2043,13 @@ export default function App() {
 
                     <div style={{ display:"flex", gap:8 }}>
                       <button onClick={() => { deletePlannerTask(editingTask.id); setEditingTaskId(null); }}
-                        style={{ flex:1, background:"#fb8a4a18", border:"1px solid #fb8a4a55", borderRadius:6, color:"#fb8a4a", padding:"8px 0", cursor:"pointer", fontSize:12 }}>🗑️ Supprimer</button>
+                        style={{ flex:1, background:"#fb8a4a18", border:"1px solid #fb8a4a55", borderRadius:6, color:"var(--accentOrange2)", padding:"8px 0", cursor:"pointer", fontSize:12 }}>🗑️ Supprimer</button>
                       <button onClick={() => setEditingTaskId(null)}
                         style={{ flex:1, background:"#68d391", border:"none", borderRadius:6, color:"var(--bg0)", padding:"8px 0", cursor:"pointer", fontSize:12, fontWeight:"bold" }}>Fermer</button>
                     </div>
                     {googleToken && (
                       <button onClick={() => sendTaskToGoogle(editingTask)}
-                        style={{ width:"100%", marginTop:8, background:"#c084fc18", border:"1px solid #c084fc55", borderRadius:6, color:"#c084fc", padding:"8px 0", cursor:"pointer", fontSize:12 }}>📅 Envoyer vers Google Calendar</button>
+                        style={{ width:"100%", marginTop:8, background:"#c084fc18", border:"1px solid #c084fc55", borderRadius:6, color:"var(--accentPurple)", padding:"8px 0", cursor:"pointer", fontSize:12 }}>📅 Envoyer vers Google Calendar</button>
                     )}
                   </div>
                 </div>
@@ -2066,14 +2074,14 @@ export default function App() {
           return (
           <div>
             <div style={{ marginBottom:20 }}>
-              <div style={{ fontSize:10, letterSpacing:4, color:"#68d391", textTransform:"uppercase", marginBottom:5 }}>Long terme</div>
+              <div style={{ fontSize:10, letterSpacing:4, color:"var(--accentGreen)", textTransform:"uppercase", marginBottom:5 }}>Long terme</div>
               <div style={{ fontSize:26, color:"var(--text)", fontWeight:"bold" }}>Life</div>
               <div style={{ fontSize:12, color:"var(--muted)", marginTop:5 }}>Objectifs majeurs et habitudes — la base de l'Effet Cumulé</div>
             </div>
 
             {/* Habitudes — calendrier hebdomadaire */}
             <div style={{ background:"var(--bg1)", borderRadius:10, border:"1px solid var(--border)", padding:"16px 18px", marginBottom:16 }}>
-              <div style={{ fontSize:10, letterSpacing:3, color:"#8ab4f8", textTransform:"uppercase", marginBottom:14 }}>🔁 Mes habitudes — semaine en cours</div>
+              <div style={{ fontSize:10, letterSpacing:3, color:"var(--accentBlue)", textTransform:"uppercase", marginBottom:14 }}>🔁 Mes habitudes — semaine en cours</div>
 
               <div style={{ display:"grid", gridTemplateColumns:"180px 1fr", gap:10 }}>
                 {/* Colonne 1 : liste des habitudes */}
@@ -2130,7 +2138,7 @@ export default function App() {
                           <div style={{ display:"flex", gap:5 }}>
                             <button onClick={() => setEditingHabitId(null)} style={{ flex:1, background:"#68d391", border:"none", borderRadius:5, padding:"5px 0", color:"var(--bg0)", fontSize:11, fontWeight:"bold", cursor:"pointer" }}>OK</button>
                             <button onClick={() => archiveHabit(h.id)} style={{ background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:5, padding:"5px 8px", color:"var(--muted)", fontSize:11, cursor:"pointer" }}>📦</button>
-                            <button onClick={() => deleteHabit(h.id)} style={{ background:"#fb8a4a18", border:"1px solid #fb8a4a55", borderRadius:5, padding:"5px 8px", color:"#fb8a4a", fontSize:11, cursor:"pointer" }}>🗑️</button>
+                            <button onClick={() => deleteHabit(h.id)} style={{ background:"#fb8a4a18", border:"1px solid #fb8a4a55", borderRadius:5, padding:"5px 8px", color:"var(--accentOrange2)", fontSize:11, cursor:"pointer" }}>🗑️</button>
                           </div>
                         </div>
                       ) : (
@@ -2156,7 +2164,7 @@ export default function App() {
                 <div>
                   <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr) 50px", gap:4, marginBottom:6 }}>
                     {DAY_LETTERS.map((l,i) => (
-                      <div key={i} style={{ textAlign:"center", fontSize:10, color: toDateKey(habitWeekDays[i])===getTodayKey() ? "#68d391" : "var(--muted)", fontFamily:"monospace" }}>{l}</div>
+                      <div key={i} style={{ textAlign:"center", fontSize:10, color: toDateKey(habitWeekDays[i])===getTodayKey() ? "var(--accentGreen)" : "var(--muted)", fontFamily:"monospace" }}>{l}</div>
                     ))}
                     <div />
                   </div>
@@ -2201,8 +2209,8 @@ export default function App() {
                   {showArchivedHabits && archivedHabits.map(h => (
                     <div key={h.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 0" }}>
                       <div style={{ fontSize:12, color:"var(--muted)", flex:1 }}>{h.title}</div>
-                      <span onClick={() => patchHabit(h.id, { archived:false })} style={{ fontSize:10, color:"#68d391", cursor:"pointer" }}>Réactiver</span>
-                      <span onClick={() => deleteHabit(h.id)} style={{ fontSize:10, color:"#fb8a4a", cursor:"pointer" }}>Supprimer</span>
+                      <span onClick={() => patchHabit(h.id, { archived:false })} style={{ fontSize:10, color:"var(--accentGreen)", cursor:"pointer" }}>Réactiver</span>
+                      <span onClick={() => deleteHabit(h.id)} style={{ fontSize:10, color:"var(--accentOrange2)", cursor:"pointer" }}>Supprimer</span>
                     </div>
                   ))}
                 </div>
@@ -2211,7 +2219,7 @@ export default function App() {
 
             {/* Objectifs */}
             <div style={{ background:"var(--bg1)", borderRadius:10, border:"1px solid var(--border)", padding:"16px 18px" }}>
-              <div style={{ fontSize:10, letterSpacing:3, color:"#f0b429", textTransform:"uppercase", marginBottom:12 }}>🎯 Mes objectifs (max 3)</div>
+              <div style={{ fontSize:10, letterSpacing:3, color:"var(--accentAmber)", textTransform:"uppercase", marginBottom:12 }}>🎯 Mes objectifs (max 3)</div>
               {goals.map(g => {
                 const { done, total } = goalProgress(g.id);
                 const pct = total > 0 ? Math.round((done/total)*100) : 0;
@@ -2278,7 +2286,7 @@ export default function App() {
           const inputStyle = {
             width:"100%", background:"var(--bg3)", border:"1px solid var(--border2)",
             borderRadius:7, padding:"10px 12px", color:"var(--text2)",
-            fontSize:13, fontFamily:"Georgia,serif", lineHeight:1.6,
+            fontSize:13, fontFamily:"'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", lineHeight:1.6,
             outline:"none", resize:"vertical", boxSizing:"border-box",
             minHeight:72,
           };
@@ -2292,8 +2300,8 @@ export default function App() {
                 </div>
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:8 }}>
                   <input type="date" value={bilanDate} onChange={e => setBilanDate(e.target.value)}
-                    style={{ background:"var(--bg1)", border:"1px solid var(--border2)", borderRadius:6, padding:"5px 10px", color:"#8ab4f8", fontSize:12, fontFamily:"monospace", outline:"none" }}/>
-                  <div style={{ fontSize:11, color: bilanSaved ? "#68d391" : "var(--muted2)", fontFamily:"monospace" }}>
+                    style={{ background:"var(--bg1)", border:"1px solid var(--border2)", borderRadius:6, padding:"5px 10px", color:"var(--accentBlue)", fontSize:12, fontFamily:"monospace", outline:"none" }}/>
+                  <div style={{ fontSize:11, color: bilanSaved ? "var(--accentGreen)" : "var(--muted2)", fontFamily:"monospace" }}>
                     {bilanLoading ? "⟳ chargement..." : bilanSaved ? "● sauvegardé" : "..."}
                   </div>
                 </div>
@@ -2311,11 +2319,11 @@ export default function App() {
                         <div key={h.val} onClick={() => updateBilan("humeur", bilan.humeur===h.val ? "" : h.val)} style={{
                           padding:"12px 6px", borderRadius:8, textAlign:"center", cursor:"pointer",
                           background: bilan.humeur===h.val ? "#8ab4f833" : "var(--bg3)",
-                          border: `2px solid ${bilan.humeur===h.val ? "#8ab4f8" : "var(--border2)"}`,
+                          border: `2px solid ${bilan.humeur===h.val ? "var(--accentBlue)" : "var(--border2)"}`,
                           transition:"all 0.2s",
                         }}>
                           <div style={{ fontSize:22, marginBottom:4 }}>{h.icon}</div>
-                          <div style={{ fontSize:10, color: bilan.humeur===h.val ? "#8ab4f8" : "var(--muted)", fontFamily:"monospace" }}>{h.label}</div>
+                          <div style={{ fontSize:10, color: bilan.humeur===h.val ? "var(--accentBlue)" : "var(--muted)", fontFamily:"monospace" }}>{h.label}</div>
                         </div>
                       ))}
                     </div>
@@ -2370,10 +2378,10 @@ export default function App() {
         {view==="analyse" && (
           <div>
             <div style={{ marginBottom:22 }}>
-              <div style={{ fontSize:10, letterSpacing:4, color:"#c084fc", textTransform:"uppercase", marginBottom:5 }}>Suivi de progression</div>
+              <div style={{ fontSize:10, letterSpacing:4, color:"var(--accentPurple)", textTransform:"uppercase", marginBottom:5 }}>Suivi de progression</div>
               <div style={{ fontSize:26, color:"var(--text)", fontWeight:"bold" }}>Analyse</div>
               <div style={{ fontSize:12, color:"var(--muted)", marginTop:5 }}>Bilan hebdomadaire et mensuel · données synchronisées</div>
-              <button onClick={exportAnalyseCSV} style={{ marginTop:10, background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"#c084fc", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>⬇️ Exporter le résumé (CSV)</button>
+              <button onClick={exportAnalyseCSV} style={{ marginTop:10, background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"var(--accentPurple)", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>⬇️ Exporter le résumé (CSV)</button>
             </div>
 
             {!analyseData ? (
@@ -2382,21 +2390,21 @@ export default function App() {
               <>
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
                   <div style={{ background:"var(--bg1)", borderRadius:9, border:"1px solid var(--border)", padding:"14px 12px", textAlign:"center" }}>
-                    <div style={{ fontSize:20, fontWeight:"bold", color:weekScore>=70?"#68d391":weekScore>=40?"#f0b429":"#fb8a4a", fontFamily:"monospace" }}>{weekScore}%</div>
+                    <div style={{ fontSize:20, fontWeight:"bold", color:weekScore>=70?"var(--accentGreen)":weekScore>=40?"var(--accentAmber)":"var(--accentOrange2)", fontFamily:"monospace" }}>{weekScore}%</div>
                     <div style={{ fontSize:9, color:"var(--muted)", letterSpacing:1, textTransform:"uppercase", marginTop:4 }}>Score global semaine</div>
                   </div>
                   <div style={{ background:"var(--bg1)", borderRadius:9, border:"1px solid var(--border)", padding:"14px 12px", textAlign:"center" }}>
-                    <div style={{ fontSize:20, fontWeight:"bold", color:"#c084fc", fontFamily:"monospace" }}>{weekHabitsMax>0?Math.round(weekHabitsDone/weekHabitsMax*100):0}%</div>
+                    <div style={{ fontSize:20, fontWeight:"bold", color:"var(--accentPurple)", fontFamily:"monospace" }}>{weekHabitsMax>0?Math.round(weekHabitsDone/weekHabitsMax*100):0}%</div>
                     <div style={{ fontSize:9, color:"var(--muted)", letterSpacing:1, textTransform:"uppercase", marginTop:4 }}>Habitudes semaine</div>
                   </div>
                 </div>
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:18 }}>
                   <div style={{ background:"var(--bg1)", borderRadius:9, border:"1px solid var(--border)", padding:"14px 12px", textAlign:"center" }}>
-                    <div style={{ fontSize:20, fontWeight:"bold", color:"#68d391", fontFamily:"monospace" }}>{weekTasksDone}/{weekTasksTotal}</div>
+                    <div style={{ fontSize:20, fontWeight:"bold", color:"var(--accentGreen)", fontFamily:"monospace" }}>{weekTasksDone}/{weekTasksTotal}</div>
                     <div style={{ fontSize:9, color:"var(--muted)", letterSpacing:1, textTransform:"uppercase", marginTop:4 }}>Tâches (7j)</div>
                   </div>
                   <div style={{ background:"var(--bg1)", borderRadius:9, border:"1px solid var(--border)", padding:"14px 12px", textAlign:"center" }}>
-                    <div style={{ fontSize:20, fontWeight:"bold", color:"#8ab4f8", fontFamily:"monospace" }}>{weekRoutine}/{weekRoutineMax}</div>
+                    <div style={{ fontSize:20, fontWeight:"bold", color:"var(--accentBlue)", fontFamily:"monospace" }}>{weekRoutine}/{weekRoutineMax}</div>
                     <div style={{ fontSize:9, color:"var(--muted)", letterSpacing:1, textTransform:"uppercase", marginTop:4 }}>Routines (7j)</div>
                   </div>
                 </div>
@@ -2406,7 +2414,7 @@ export default function App() {
                   const last8Weeks = getLastNWeeks(8);
                   return (
                   <div style={{ background:"var(--bg1)", borderRadius:10, border:"1px solid var(--border)", padding:"16px 18px", marginBottom:14 }}>
-                    <div style={{ fontSize:10, letterSpacing:3, color:"#c084fc", textTransform:"uppercase", marginBottom:12 }}>🔁 Habitudes — suivi dans le temps</div>
+                    <div style={{ fontSize:10, letterSpacing:3, color:"var(--accentPurple)", textTransform:"uppercase", marginBottom:12 }}>🔁 Habitudes — suivi dans le temps</div>
                     {activeHabitsForStats.map(h => {
                       const count = weekHabitDays.filter(d => (habitCompletions[h.id]||[]).includes(d)).length;
                       const pct = Math.round(count/7*100);
@@ -2454,7 +2462,7 @@ export default function App() {
                 {/* Objectifs détail */}
                 {goals.length > 0 && (
                   <div style={{ background:"var(--bg1)", borderRadius:10, border:"1px solid var(--border)", padding:"16px 18px", marginBottom:14 }}>
-                    <div style={{ fontSize:10, letterSpacing:3, color:"#f0b429", textTransform:"uppercase", marginBottom:12 }}>🎯 Objectifs — progression globale</div>
+                    <div style={{ fontSize:10, letterSpacing:3, color:"var(--accentAmber)", textTransform:"uppercase", marginBottom:12 }}>🎯 Objectifs — progression globale</div>
                     {goals.map(g => {
                       const { done, total } = goalProgress(g.id);
                       const pct = total > 0 ? Math.round(done/total*100) : 0;
@@ -2475,10 +2483,10 @@ export default function App() {
 
                 {/* 7 jours */}
                 <div style={{ background:"var(--bg1)", borderRadius:10, border:"1px solid var(--border)", padding:"16px 18px", marginBottom:14 }}>
-                  <div style={{ fontSize:10, letterSpacing:3, color:"#c084fc", textTransform:"uppercase", marginBottom:14 }}>7 derniers jours</div>
+                  <div style={{ fontSize:10, letterSpacing:3, color:"var(--accentPurple)", textTransform:"uppercase", marginBottom:14 }}>7 derniers jours</div>
                   <BarChart data={weeklyData} maxVal={9}/>
                   <div style={{ display:"flex", gap:16, marginTop:12, justifyContent:"center" }}>
-                    {[["#68d391","Tâches /6"],["#8ab4f8","Routines"]].map(([c,l]) => (
+                    {[["var(--accentGreen)","Tâches /6"],["var(--accentBlue)","Routines"]].map(([c,l]) => (
                       <div key={l} style={{ display:"flex", alignItems:"center", gap:6 }}>
                         <div style={{ width:10, height:10, borderRadius:2, background:c }}/>
                         <span style={{ fontSize:10, color:"var(--muted)" }}>{l}</span>
@@ -2491,9 +2499,9 @@ export default function App() {
                       const isToday = last7[i]===getTodayKey();
                       return (
                         <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"6px 0", borderBottom:i<6?"1px solid var(--border2)":"none", opacity:!d.hasData&&!isToday?0.35:1 }}>
-                          <div style={{ width:72, fontSize:11, color:isToday?"#c084fc":"var(--muted)", fontFamily:"monospace" }}>
+                          <div style={{ width:72, fontSize:11, color:isToday?"var(--accentPurple)":"var(--muted)", fontFamily:"monospace" }}>
                             {date.toLocaleDateString("fr-FR",{weekday:"short",day:"numeric"})}
-                            {isToday && <span style={{ color:"#c084fc" }}> ●</span>}
+                            {isToday && <span style={{ color:"var(--accentPurple)" }}> ●</span>}
                           </div>
                           <div style={{ flex:1 }}>
                             <div style={{ display:"flex", gap:4, marginBottom:3 }}>
@@ -2514,14 +2522,14 @@ export default function App() {
 
                 {/* 6 mois */}
                 <div style={{ background:"var(--bg1)", borderRadius:10, border:"1px solid var(--border)", padding:"16px 18px", marginBottom:14 }}>
-                  <div style={{ fontSize:10, letterSpacing:3, color:"#c084fc", textTransform:"uppercase", marginBottom:14 }}>6 derniers mois — moyenne / jour actif</div>
+                  <div style={{ fontSize:10, letterSpacing:3, color:"var(--accentPurple)", textTransform:"uppercase", marginBottom:14 }}>6 derniers mois — moyenne / jour actif</div>
                   <BarChart data={bilanMensuel.map(d=>({...d,tasks:d.avgTasks,routine:d.avgRoutine,total:9}))} maxVal={9}/>
                   <div style={{ display:"grid", gridTemplateColumns:"repeat(6,1fr)", gap:6, marginTop:12 }}>
                     {bilanMensuel.map((m,i) => (
                       <div key={i} style={{ background:"var(--bg3)", borderRadius:6, padding:"8px 4px", border:"1px solid var(--border2)", textAlign:"center" }}>
                         <div style={{ fontSize:10, color:"var(--muted)", textTransform:"capitalize", marginBottom:4 }}>{m.label}</div>
-                        <div style={{ fontSize:13, color:"#68d391", fontFamily:"monospace" }}>{m.avgTasks}/6</div>
-                        <div style={{ fontSize:13, color:"#8ab4f8", fontFamily:"monospace" }}>{m.avgRoutine}/9</div>
+                        <div style={{ fontSize:13, color:"var(--accentGreen)", fontFamily:"monospace" }}>{m.avgTasks}/6</div>
+                        <div style={{ fontSize:13, color:"var(--accentBlue)", fontFamily:"monospace" }}>{m.avgRoutine}/9</div>
                         <div style={{ fontSize:9, color:"var(--muted2)", marginTop:3 }}>{m.activeDays}j actifs</div>
                       </div>
                     ))}
@@ -2547,7 +2555,7 @@ export default function App() {
             </div>
 
             <div style={{ background:"var(--bg1)", borderRadius:10, border:"1px solid var(--border)", padding:"16px 18px", marginBottom:16 }}>
-              <div style={{ fontSize:10, letterSpacing:3, color:"#8ab4f8", textTransform:"uppercase", marginBottom:12 }}>🪄 Auto-planification</div>
+              <div style={{ fontSize:10, letterSpacing:3, color:"var(--accentBlue)", textTransform:"uppercase", marginBottom:12 }}>🪄 Auto-planification</div>
 
               <div style={{ fontSize:12, color:"var(--text2)", marginBottom:6 }}>Plage horaire de travail</div>
               <div style={{ display:"flex", gap:8, marginBottom:14 }}>
@@ -2564,13 +2572,13 @@ export default function App() {
                   <div key={m} onClick={() => patchSettings({ buffer_minutes: m })}
                     style={{ flex:1, textAlign:"center", padding:"6px 0", borderRadius:6, cursor:"pointer", fontSize:11,
                       background: settings.buffer_minutes===m ? "#8ab4f822" : "var(--bg3)",
-                      border:`1px solid ${settings.buffer_minutes===m?"#8ab4f8":"var(--border)"}`,
-                      color: settings.buffer_minutes===m?"#8ab4f8":"var(--muted)" }}>{m}m</div>
+                      border:`1px solid ${settings.buffer_minutes===m?"var(--accentBlue)":"var(--border)"}`,
+                      color: settings.buffer_minutes===m?"var(--accentBlue)":"var(--muted)" }}>{m}m</div>
                 ))}
               </div>
 
               <div onClick={() => patchSettings({ auto_reschedule: !settings.auto_reschedule })} style={{ display:"flex", alignItems:"center", gap:10, cursor:"pointer" }}>
-                <CheckBox checked={!!settings.auto_reschedule} color="#68d391" />
+                <CheckBox checked={!!settings.auto_reschedule} color="var(--accentGreen)" />
                 <div style={{ fontSize:12, color:"var(--text2)" }}>
                   Replanification automatique en continu — dès qu'une tâche flexible (🔓) prend du retard ou entre en conflit avec un événement Google Calendar, elle est déplacée toute seule vers le prochain créneau libre. Les tâches verrouillées (🔒) ne sont jamais touchées.
                 </div>
@@ -2578,24 +2586,24 @@ export default function App() {
             </div>
 
             <div style={{ background:"var(--bg1)", borderRadius:10, border:"1px solid var(--border)", padding:"16px 18px", marginBottom:16 }}>
-              <div style={{ fontSize:10, letterSpacing:3, color:"#f0b429", textTransform:"uppercase", marginBottom:12 }}>🔔 Notifications</div>
+              <div style={{ fontSize:10, letterSpacing:3, color:"var(--accentAmber)", textTransform:"uppercase", marginBottom:12 }}>🔔 Notifications</div>
               <div style={{ fontSize:12, color:"var(--text2)", marginBottom:12 }}>Reçois une notification navigateur à l'heure exacte de chaque tâche planifiée (l'onglet doit rester ouvert).</div>
               {settings.notifications_enabled ? (
                 <div onClick={() => patchSettings({ notifications_enabled:false })} style={{ display:"flex", alignItems:"center", gap:10, cursor:"pointer" }}>
-                  <CheckBox checked={true} color="#f0b429" />
+                  <CheckBox checked={true} color="var(--accentAmber)" />
                   <div style={{ fontSize:12, color:"var(--text2)" }}>Notifications activées — clique pour désactiver</div>
                 </div>
               ) : (
-                <button onClick={requestNotificationPermission} style={{ background:"#f0b42918", border:"1px solid #f0b42955", borderRadius:6, color:"#f0b429", padding:"8px 14px", cursor:"pointer", fontSize:12 }}>Activer les notifications</button>
+                <button onClick={requestNotificationPermission} style={{ background:"#f0b42918", border:"1px solid #f0b42955", borderRadius:6, color:"var(--accentAmber)", padding:"8px 14px", cursor:"pointer", fontSize:12 }}>Activer les notifications</button>
               )}
             </div>
 
             <div style={{ background:"var(--bg1)", borderRadius:10, border:"1px solid var(--border)", padding:"16px 18px", marginBottom:16 }}>
-              <div style={{ fontSize:10, letterSpacing:3, color:"#c084fc", textTransform:"uppercase", marginBottom:12 }}>📅 Google Calendar</div>
+              <div style={{ fontSize:10, letterSpacing:3, color:"var(--accentPurple)", textTransform:"uppercase", marginBottom:12 }}>📅 Google Calendar</div>
               {googleToken ? (
-                <button onClick={disconnectGoogle} style={{ background:"#68d39118", border:"1px solid #68d39155", borderRadius:6, color:"#68d391", padding:"8px 14px", cursor:"pointer", fontSize:12 }}>Déconnecter Google Calendar</button>
+                <button onClick={disconnectGoogle} style={{ background:"#68d39118", border:"1px solid #68d39155", borderRadius:6, color:"var(--accentGreen)", padding:"8px 14px", cursor:"pointer", fontSize:12 }}>Déconnecter Google Calendar</button>
               ) : (
-                <button onClick={connectGoogle} style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"#8ab4f8", padding:"8px 14px", cursor:"pointer", fontSize:12 }}>Connecter Google Calendar</button>
+                <button onClick={connectGoogle} style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"var(--accentBlue)", padding:"8px 14px", cursor:"pointer", fontSize:12 }}>Connecter Google Calendar</button>
               )}
             </div>
 
@@ -2605,8 +2613,8 @@ export default function App() {
                 {[["dark","🌙 Sombre"],["light","☀️ Clair"]].map(([v,l]) => (
                   <button key={v} onClick={() => patchSettings({ theme: v })} style={{
                     flex:1, background: settings.theme===v ? "#8ab4f822" : "var(--bg3)",
-                    border:`1px solid ${settings.theme===v?"#8ab4f8":"var(--border)"}`,
-                    borderRadius:6, color: settings.theme===v?"#8ab4f8":"var(--muted)", padding:"10px 0", cursor:"pointer", fontSize:12 }}>{l}</button>
+                    border:`1px solid ${settings.theme===v?"var(--accentBlue)":"var(--border)"}`,
+                    borderRadius:6, color: settings.theme===v?"var(--accentBlue)":"var(--muted)", padding:"10px 0", cursor:"pointer", fontSize:12 }}>{l}</button>
                 ))}
               </div>
             </div>
@@ -2633,7 +2641,7 @@ export default function App() {
       {showQuickCapture && (
         <div onClick={() => setShowQuickCapture(false)} style={{ position:"fixed", inset:0, background:"#000000aa", display:"flex", alignItems:"flex-start", justifyContent:"center", paddingTop:"18vh", zIndex:200 }}>
           <div onClick={e => e.stopPropagation()} style={{ background:"var(--bg1)", border:"1px solid var(--border2)", borderRadius:10, padding:16, width:380, maxWidth:"90vw" }}>
-            <div style={{ fontSize:10, letterSpacing:2, color:"#68d391", textTransform:"uppercase", marginBottom:10 }}>⚡ Capture rapide → Inbox</div>
+            <div style={{ fontSize:10, letterSpacing:2, color:"var(--accentGreen)", textTransform:"uppercase", marginBottom:10 }}>⚡ Capture rapide → Inbox</div>
             <input autoFocus value={quickCaptureVal} onChange={e => setQuickCaptureVal(e.target.value)}
               onKeyDown={e => { if (e.key==="Enter") quickCapture(); if (e.key==="Escape") setShowQuickCapture(false); }}
               placeholder="Note ou tâche... (Entrée pour valider)"
@@ -2645,7 +2653,7 @@ export default function App() {
       {showShortcuts && (
         <div onClick={() => setShowShortcuts(false)} style={{ position:"fixed", inset:0, background:"#000000aa", display:"flex", alignItems:"center", justifyContent:"center", zIndex:200 }}>
           <div onClick={e => e.stopPropagation()} style={{ background:"var(--bg1)", border:"1px solid var(--border2)", borderRadius:10, padding:20, width:340, maxWidth:"90vw" }}>
-            <div style={{ fontSize:10, letterSpacing:2, color:"#8ab4f8", textTransform:"uppercase", marginBottom:14 }}>⌨️ Raccourcis clavier</div>
+            <div style={{ fontSize:10, letterSpacing:2, color:"var(--accentBlue)", textTransform:"uppercase", marginBottom:14 }}>⌨️ Raccourcis clavier</div>
             {[
               ["N","Capture rapide"],
               ["/","Recherche globale"],
@@ -2660,7 +2668,7 @@ export default function App() {
             ].map(([k,l]) => (
               <div key={k} style={{ display:"flex", justifyContent:"space-between", padding:"6px 0", borderBottom:"1px solid var(--border2)" }}>
                 <span style={{ fontSize:12, color:"var(--text2)" }}>{l}</span>
-                <span style={{ fontSize:11, color:"#68d391", fontFamily:"monospace", background:"var(--bg3)", padding:"2px 8px", borderRadius:4 }}>{k}</span>
+                <span style={{ fontSize:11, color:"var(--accentGreen)", fontFamily:"monospace", background:"var(--bg3)", padding:"2px 8px", borderRadius:4 }}>{k}</span>
               </div>
             ))}
           </div>
@@ -2676,7 +2684,7 @@ export default function App() {
         return (
           <div onClick={() => { setShowGlobalSearch(false); setGlobalSearchQuery(""); }} style={{ position:"fixed", inset:0, background:"#000000aa", display:"flex", alignItems:"flex-start", justifyContent:"center", paddingTop:"12vh", zIndex:200 }}>
             <div onClick={e => e.stopPropagation()} style={{ background:"var(--bg1)", border:"1px solid var(--border2)", borderRadius:10, padding:16, width:420, maxWidth:"90vw", maxHeight:"70vh", overflowY:"auto" }}>
-              <div style={{ fontSize:10, letterSpacing:2, color:"#8ab4f8", textTransform:"uppercase", marginBottom:10 }}>🔎 Recherche globale</div>
+              <div style={{ fontSize:10, letterSpacing:2, color:"var(--accentBlue)", textTransform:"uppercase", marginBottom:10 }}>🔎 Recherche globale</div>
               <input autoFocus value={globalSearchQuery} onChange={e => setGlobalSearchQuery(e.target.value)}
                 onKeyDown={e => { if (e.key==="Escape") { setShowGlobalSearch(false); setGlobalSearchQuery(""); } }}
                 placeholder="Cherche une tâche, un objectif, une habitude..."
