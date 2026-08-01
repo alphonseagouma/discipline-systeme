@@ -926,21 +926,6 @@ export default function App() {
 
   const disconnectGoogle = () => { setGoogleToken(null); setGoogleEvents([]); localStorage.removeItem("google_connected"); };
 
-  // Reconnexion silencieuse automatique après un redéploiement ou un rechargement
-  useEffect(() => {
-    if (localStorage.getItem("google_connected") !== "1") return;
-    let tries = 0;
-    const tryReconnect = () => {
-      tries++;
-      if (window.google?.accounts) {
-        getGoogleTokenClient()?.requestAccessToken({ prompt: "" });
-      } else if (tries < 20) {
-        setTimeout(tryReconnect, 300);
-      }
-    };
-    tryReconnect();
-  }, []);
-
   const loadGoogleEvents = async () => {
     if (!googleToken) return;
     setGoogleLoading(true);
