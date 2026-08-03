@@ -447,7 +447,7 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const [syncOk, setSyncOk] = useState(null);
   const [analyseData, setAnalyseData] = useState(null);
-  const [bilan, setBilan] = useState({ humeur:"", bien:"", ameliore:"", taches:"", moment:"", gratitude:"", libre:"" });
+  const [bilan, setBilan] = useState({ humeur:"", senti:"", reussi:"", tombe:"", appris:"", dieu:"", priorite_demain:"" });
   const [bilanSaved, setBilanSaved] = useState(false);
   const [bilanDate, setBilanDate] = useState(getTodayKey());
   const [bilanLoading, setBilanLoading] = useState(false);
@@ -649,7 +649,7 @@ export default function App() {
     const load = async () => {
       setBilanLoading(true);
       const row = await dbGet("daily_bilans", bilanDate);
-      setBilan(row?.bilan || { humeur:"", bien:"", ameliore:"", taches:"", moment:"", gratitude:"", libre:"" });
+      setBilan(row?.bilan || { humeur:"", senti:"", reussi:"", tombe:"", appris:"", dieu:"", priorite_demain:"" });
       setBilanSaved(!!row);
       setBilanLoading(false);
     };
@@ -674,10 +674,10 @@ export default function App() {
   const exportBilansCSV = async () => {
     const rows = await dbList("daily_bilans", "&order=date_key.asc");
     if (!rows || rows.length === 0) { alert("Aucun bilan enregistré pour l'instant."); return; }
-    const header = ["Date","Humeur","Ce qui s'est bien passé","À améliorer","Tâches marquantes","Meilleur moment","Gratitude","Notes libres"];
+    const header = ["Date","Humeur","Je me suis senti","J'ai réussi à","Ce que j'aurais pu mieux faire","Ce que j'ai appris","Ce que je confie à Dieu","Priorité pour demain"];
     const body = rows.map(r => {
       const b = r.bilan || {};
-      return [r.date_key, b.humeur, b.bien, b.ameliore, b.taches, b.moment, b.gratitude, b.libre];
+      return [r.date_key, b.humeur, b.senti, b.reussi, b.tombe, b.appris, b.dieu, b.priorite_demain];
     });
     downloadCSV(`bilans_${getTodayKey()}.csv`, [header, ...body]);
   };
@@ -2267,11 +2267,12 @@ export default function App() {
             { val:"difficile", icon:"😔", label:"Difficile" },
           ];
           const SECTIONS = [
-            { field:"bien", icon:"✅", label:"Ce que j'ai bien fait aujourd'hui", placeholder:"Qu'est-ce qui s'est bien passé ? Quelle action ou attitude dont je suis fier ?" },
-            { field:"taches", icon:"📋", label:"Tâches non accomplies — pourquoi ?", placeholder:"Quelles tâches je n'ai pas faites, et pour quelle raison ?" },
-            { field:"ameliore", icon:"🎯", label:"Ce que j'améliore demain", placeholder:"Quelle est la chose concrète que je vais faire différemment demain ?" },
-            { field:"moment", icon:"⭐", label:"Moment fort de la journée", placeholder:"Quel moment ou événement m'a le plus marqué aujourd'hui ?" },
-            { field:"gratitude", icon:"🙏", label:"Gratitude — 1 chose positive", placeholder:"Pour quoi suis-je reconnaissant aujourd'hui, même si la journée a été difficile ?" },
+            { field:"senti", icon:"💭", label:"Aujourd'hui je me suis senti...", placeholder:"Comment tu te sens, sans filtre..." },
+            { field:"reussi", icon:"✅", label:"Aujourd'hui j'ai réussi à...", placeholder:"Une victoire, petite ou grande..." },
+            { field:"tombe", icon:"⚠️", label:"Ce que j'aurais pu mieux faire...", placeholder:"Ce qui n'a pas marché, ce que j'ai raté..." },
+            { field:"appris", icon:"💡", label:"Ce que j'ai appris...", placeholder:"Une leçon, une prise de conscience..." },
+            { field:"dieu", icon:"🙏", label:"Ce que je confie à Dieu...", placeholder:"Ce que tu remets entre Ses mains..." },
+            { field:"priorite_demain", icon:"🎯", label:"Ma priorité pour demain...", placeholder:"Une seule chose, la plus importante..." },
           ];
           const inputStyle = {
             width:"100%", background:"var(--bg3)", border:"1px solid var(--border2)",
@@ -2283,8 +2284,8 @@ export default function App() {
           return (
             <div>
               <div style={{ marginBottom:20 }}>
-                <div style={{ fontSize:10, letterSpacing:4, color:"var(--accentOrange)", textTransform:"uppercase", marginBottom:5 }}>Journal du soir</div>
-                <div style={{ fontSize:26, color:"var(--text)", fontWeight:"bold" }}>Bilan de journée</div>
+                <div style={{ fontSize:10, letterSpacing:4, color:"var(--accentOrange)", textTransform:"uppercase", marginBottom:5 }}>Chaque soir · une page</div>
+                <div style={{ fontSize:26, color:"var(--text)", fontWeight:"bold" }}>Journal personnel</div>
                 <div style={{ marginTop:6 }}>
                   <button onClick={exportBilansCSV} style={{ background:"var(--bg1)", border:"1px solid var(--border)", borderRadius:6, color:"var(--accentOrange)", padding:"5px 10px", cursor:"pointer", fontSize:11 }}>⬇️ Exporter tout l'historique (CSV)</button>
                 </div>
@@ -2335,26 +2336,9 @@ export default function App() {
                     </div>
                   ))}
 
-                  {/* Espace libre */}
-                  <div style={{ background:"var(--bg1)", borderRadius:10, border:"1px solid var(--border)", padding:"16px 18px", marginBottom:12 }}>
-                    <div style={{ fontSize:10, letterSpacing:3, color:"var(--accentOrange)", textTransform:"uppercase", marginBottom:10 }}>
-                      📓 Notes libres
-                    </div>
-                    <div style={{ fontSize:11, color:"var(--muted2)", marginBottom:10, fontStyle:"italic" }}>
-                      Tout ce que tu veux ajouter — pensées, observations, idées du jour...
-                    </div>
-                    <textarea
-                      value={bilan.libre}
-                      onChange={e => updateBilan("libre", e.target.value)}
-                      placeholder="Écris librement ce qui te vient à l'esprit..."
-                      rows={5}
-                      style={{ ...inputStyle, minHeight:110 }}
-                    />
-                  </div>
-
                   <div style={{ background:"var(--bg3)", borderRadius:9, border:"1px solid var(--border2)", padding:"14px 18px", textAlign:"center" }}>
                     <div style={{ fontSize:12, color:"var(--muted)", lineHeight:1.8, fontStyle:"italic" }}>
-                      Chaque bilan écrit est une victoire sur l'inertie.<br/>
+                      Chaque page écrite est une victoire sur l'inertie.<br/>
                       <span style={{ fontSize:11, color:"var(--muted2)" }}>Sauvegarde automatique · Synchronisé sur tous tes appareils</span>
                     </div>
                   </div>
